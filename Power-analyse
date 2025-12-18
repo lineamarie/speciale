@@ -1,0 +1,107 @@
+#Power-analyse
+
+#Sæt working directory
+
+setwd("/Users/lineamarie/Desktop/Speciale data/Kodning")
+
+#Installer pakke fra Schuessler & Freitag (2020):
+#if(!require(devtools)) install.packages("devtools") 
+#library(devtools) 
+#devtools::install_github ("m-freitag/cjpowR")
+
+#install.packages("devtools")
+#install.packages("cjpowR") #Package from Schuessler & Freitag (2020)
+
+#Load pakkerne
+library(devtools)
+library(cjpowR)
+
+
+#Udemokratisk adfærd (AMCE fra syn på domstolene) (2 underniveauer)
+df_domstole=cjpowr_amce(amce=-0.045,power=0.8,levels=2,alpha=0.05)
+df_domstole
+#Effective sample size=n=3869
+#2 profiler og 6 opgaver
+df_domstole$n/(2*6)
+#n er effective sample size=number of respondents*number of individually assessed profiles*number of choice set tasks each respondent completes
+#Her er påkrævede respondenter n=322,3451
+
+#Plot type M fejl
+
+d <- expand.grid(
+  amce = c(0.01, 0.02, 0.03, 0.05), 
+  n = seq(from = 100, to = 50000, length.out = 1000), 
+  alpha = 0.045, 
+  levels = 2,
+  treat.prob = 0.5,
+  sims = 10000 
+)
+
+df <- list2DF(do.call(cjpowr_amce, d))
+
+install.packages("plotly")
+library(plotly)
+plot_ly(df, x = ~n, y = ~exp_typeM, type = 'scatter', mode = 'lines', linetype = ~amce) %>%
+  layout(
+    xaxis = list(title = "Effective Sample Size",
+                 zeroline = F,
+                 hoverformat = '.0f'),
+    yaxis = list(title = "Exaggeration Ratio",
+                 range = c(0,10),
+                 zeroline = F,
+                 hoverformat = '.2f'),
+    legend=list(title=list(text='<b> AMCE </b>')),
+    hovermode = "x unified"
+  )
+
+
+#Udemokratisk adfærd (AMCE fra syn på kritiske medier) (2 underniveauer)
+df_kritiskemedier=cjpowr_amce(amce=-0.033,power=0.8,levels=2,alpha=0.05)
+df_kritiskemedier
+#n=7199.571
+#smaller effect → harder to detect → need more data.
+#2 profiler og 6 opgaver
+df_kritiskemedier$n/(2*6)
+#Her er påkrævede respondenter n=599,9642
+
+#########
+
+#INTERAKTIONSEFFEKTER med cjpowr_amcie
+#levels1 & levels2 angiver antal niveauer for de to interagerende attributter
+#delta1, delta2, delta3,... er de AMCEI'er jeg vil have power til at finde. 
+#Forskelle i AMCE'er på tværs af niveauer af den anden attribut (dvs. hvor meget hovedeffekten ændrer, når man går til et givent niveau af den modererende attribut)
+#Deltaer=0 antages ikke at have nogen interaktionseffekt
+#Antallet af delta-argumenter skal passe til antallet af niveauer i moderator-attributten minus 1. 
+args(cjpowr_amcie)
+# Funktionen godtager kun argumenterne delta0,delta1 og delta3
+##########
+
+#Interaktion mellem Udemokratisk adfærd x Politisk enighed (2x2 niveauer)
+#Attribut A=Udemokratisk adfærd (0=Nej, 1=Ja)
+#Attribut B=Politisk enighed (0=Nej, 1=Ja)
+#delta0=AMCE for Udemokratisk adfærd når Politisk enighed=0. Effekt af skifte fra demokratisk til udemokratisk adfærd, når der ikke er politisk enighed
+#delta1=AMCE for Politisk enighed når Udemokratisk adfærd=0. Effekt af at skifte fra Ingen enighed til Enighed, når adfærd er demokratisk.
+#delta3=interaktionseffekt. Hvor meget effekten af Udemokratisk adfærd ændrer sig, når man går fra at være Politisk uenige til at være Politisk enige.Dvs. forskel i conditional AMCEs.
+
+df_politiskenighed=cjpowr_amcie(delta0=-0.033,delta1=0.05,delta3=0.012,levels=2,levels2=2, power=0.80)
+df_politiskenighed
+#n=8474
+#2 profiler og 6 opgaver
+df_politiskenighed$n/(2*6)
+#Her er påkrævede respondenter n=707
+
+
+#Interaktion mellem Udemokratisk adfærd x Regeringserfaring (2x2 niveauer)
+#Attribut A=Udemokratisk adfærd (0=Nej, 1=Ja)
+#Attribut B=Regeringserfaring (0=Nej, 1=Ja)
+#delta0=AMCE for Udemokratisk adfærd når Regeringserfaring=0. Effekt af skifte fra demokratisk til udemokratisk adfærd, når der ikke er erfaring
+#delta1=AMCE for Regeringserfaring når Udemokratisk adfærd=0. Effekt af at skifte fra Ingen erfaring til Erfaring, når adfærd er demokratisk.
+#delta3=interaktionseffekt. Hvor meget effekten af Udemokratisk adfærd ændrer sig, når man går fra Erfaring til Ingen erfaring.Dvs. forskel i conditional AMCEs.
+
+df_regeringserfaring=cjpowr_amcie(delta0=-0.01,delta1=0.12,delta3=0.041,levels=2,levels2=2, power=0.80)
+df_regeringserfaring
+#n=6412,8
+#2 profiler og 7 opgaver
+df_regeringserfaring$n/(2*6)
+#Her er påkrævede respondenter n=535
+
