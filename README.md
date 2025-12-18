@@ -4,4 +4,6 @@ Dette repository indeholder data og R-kode anvendt i mit speciale i statskundska
 # Indhold
 `clean_excel_sheet_28okt.xlsx`: Datasæt anvendt i analyserne
 `ny_population.xlsx`: Populationsdata fra Danmarks Statistik anvendt til sammenligning af stikprøve med population
-`script/`: R-script til datahåndtering og analyse
+`Kodning af specialedata/`: R-script til datahåndtering og analyse
+`Power-analyse/`: R-script til datahåndtering og analyse
+
