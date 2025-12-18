@@ -1,0 +1,3401 @@
+#Kodning af specialedata. Linea Marie Kronborg Johansen. Efterår 2025
+
+#Sætter working directory
+setwd("/Users/lineamarie/Desktop/Speciale data/Data forberedelse")
+
+#Indlæser pakker
+library(readxl)
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(ggplot2)
+library(knitr)
+library(dplyr)
+library(stargazer)
+library(scales)
+
+#Indlæser tre faner fra excel-arket med data
+respondents <- read_excel("clean_excel_sheet_28okt.xlsx", sheet="Respondents")
+design_matrix <- read_excel("clean_excel_sheet_28okt.xlsx", sheet="Design matrix")
+raw_responses <- read_excel("clean_excel_sheet_28okt.xlsx", sheet="Raw responses")
+
+#De tre datasæt merges. Først omformes raw_responses så det kan merges med design_matrix
+#Det drejer sig om kandidat-alternativerne (ALT) der skal omkodes fra bredt (q1-q6) til et langt format
+#Kandidat-alternativerne skal omkodes, så der kommer en binær choice-variabel (1/0)
+
+#omkoder raw_responses til langt format
+raw_responses_long <- raw_responses %>%
+  pivot_longer(
+    cols = starts_with("q"),
+    names_to = "qes",
+    names_prefix = "q",
+    values_to = "chosen_alt"
+  ) %>%
+  mutate(
+    qes = as.integer(qes),
+    chosen_alt = as.integer(chosen_alt)
+  )
+
+#Tjekker om omkodningen er lykkedes.
+#View(raw_responses_long) #Det ser rigtigt ud.
+
+#Nu kan design_matrix + raw_responses_long merges
+merged_two <- raw_responses_long %>%
+  select(participant_id, block, qes, chosen_alt) %>%
+  left_join(design_matrix, by = c("block" = "block", "qes" = "qes")) %>%
+  mutate(
+    choice = if_else(alt == chosen_alt, 1, 0) #laver binær indikator
+  )
+
+#Sanity check - tjek at den binære variabel fungerer
+table(merged_two$choice) #Det ser rigtigt ud, choice-variablen fordeler sig 50/50.
+
+#Nu merges  med respondents - her bruges både participant_id og block, som er ens
+df <- merged_two %>%
+  left_join(respondents, by = c("participant_id", "block"))
+
+#Nu findes et samlet datasæt, df. Tjekker resultatet
+glimpse(df)
+
+######Omkodning af det samlede datasæt######
+
+#Tæller antal unikke respondenter
+n_distinct(df$participant_id)
+
+#Tæller antal unikke observationer
+nrow(df) #6420
+
+#Passer godt med antal respondenter x 12 observationer
+535*12 #=6420
+
+#Tjekker fordelingen af interviewlængde - deskriptiv statistik
+summary(df$length_of_interview_seconds) #min er 123 og max er 13727
+mean(df$length_of_interview_seconds) #gennemsnitet er 375 sekunder, cirka 6,5 minut
+sd(df$length_of_interview_seconds)
+table(df$length_of_interview_seconds)
+
+#Visualiserer
+ggplot(df, aes(x = length_of_interview_seconds)) +
+  geom_histogram(aes(y=after_stat(count/12)), #dividerer med 12 for at få antal respondenter
+                 bins = 30, fill = "steelblue", color = "white") +
+  labs(
+    title = "Antal sekunder brugt på besvarelse",
+    x = "Interviewlængde (sekunder)",
+    y = "Antal respondenter"
+  ) +
+  scale_x_continuous(limits = c(0, 1550), expand = c(0, 0))+
+  theme_minimal(base_family = "Times")
+
+#Tæller hvor mange observationer der var under 2,5 minutter (150 sekunder)
+df %>%
+  filter(length_of_interview_seconds < 150) %>%
+  summarise(short_interviews = n())
+
+##60 observationer er fra interviews<2,5 minut. Dividerer med 12 for at finde antal respondenter
+60/12
+
+#det er 5 respondenter. De kodes fra, da de sandsynligvis har hastet sig gennem besvarelsen. 
+hurtige_respondenter <- df %>%
+  filter(length_of_interview_seconds < 150) %>%
+  distinct(participant_id)
+
+df_clean <- df %>% filter(!participant_id %in% hurtige_respondenter$participant_id)
+
+#Tjekker forskellen på gamle og nye data frame
+nrow(df) #6420 observationer før
+nrow(df_clean) #6360 observationer nu, hvilket passer med -5*12=-60 observationer
+
+###VARIABLE###
+#Tjekker hvilke variable der fungerer fint
+
+#KØN
+table(df_clean$q2_køn)
+str(df_clean$q2_køn) #character
+df_clean$q2_køn <- as.factor(df_clean$q2_køn) #omkoder til factor
+
+#ALDER
+table(df_clean$q3_alder)
+str(df_clean$q3_alder) #numerisk - fint
+
+#KOMMUNE
+table(df_clean$q4_kommune) #tjekker antal obs. i hver kommune
+str(df_clean$q4_kommune) #variablen er en character
+df_clean$q4_kommune <- as.factor(df_clean$q4_kommune) #omkoder til factor
+sort(table(df_clean$q4_kommune)) #sorteret efter størrelse
+n_distinct(df_clean$q4_kommune) #hvor mange kommuner er repræsenteret
+prop.table(table(df_clean$q4_kommune))*100 #procentfordeling
+df_clean %>%
+  count(q4_kommune, sort = TRUE) %>%
+  mutate(procent = round(n / sum(n) * 100, 1))
+
+#Plotter de 15 største kommuner
+df_clean %>%
+  count(q4_kommune, sort = TRUE) %>%
+  mutate(respondenter = n / 12) %>%
+  top_n(15, respondenter) %>%
+  ggplot(aes(x = reorder(q4_kommune, respondenter), y = respondenter)) +
+  geom_col(fill = "steelblue") +
+  coord_flip() +
+  labs(
+    title = "Top 15 kommuner efter antal respondenter",
+    x = "Kommune",
+    y = "Antal respondenter"
+  ) +
+  theme_minimal(base_family = "Times") +
+  theme(
+    plot.title = element_text(size = 14),
+    axis.text = element_text(size = 10)
+  )
+
+#Tabel med top 10 kommuner efter antal respondenter
+df_clean %>%
+  count(q4_kommune, sort = TRUE) %>%
+  mutate(procent = round(100 * n / sum(n), 1),
+         respondenter = round(n / 12)) %>%
+  top_n(10, respondenter) %>%
+  rename("Kommune" = q4_kommune,
+         "Observationer" = n,
+         "Respondenter" = respondenter,
+         "Procent" = procent) %>%
+  kable(caption = "Top 10 kommuner efter antal respondenter")
+
+#Danmarkskort
+library(geodata)
+library(sf)
+
+#Henter Danmark (kommuner)
+dk_map <- geodata::gadm("Denmark", level = 2, path = tempdir()) |> 
+  st_as_sf()
+
+kommune_data <- df_clean %>%
+  count(q4_kommune, name = "respondenter") %>%
+  mutate(kommune_navn = q4_kommune)
+
+#Tjekker navngivningen i dk_map
+unique(dk_map$NAME_2)[1:10]
+
+#Matcher navngivningen i datasæt
+kommune_data <- kommune_data %>%
+  mutate(kommune_navn = gsub(" Kommune", "", kommune_navn))
+
+#Merger
+dk_map_merged <- dk_map %>%
+  left_join(kommune_data, by = c("NAME_2" = "kommune_navn"))
+
+#Plotter første Danmarkskort farvet efter antal respondenter
+ggplot(dk_map_merged) +
+  geom_sf(aes(fill = respondenter / 12), color = "white", size = 0.2) +
+  scale_fill_gradient(low = "lightblue", high = "steelblue", na.value = "grey90") +
+  labs(
+    title = "Antal respondenter pr. kommune",
+    fill = "Antal respondenter"
+  ) +
+  theme_minimal(base_family = "Times") +
+  theme(
+    plot.title = element_text(size = 14),
+    legend.title = element_text(size = 11),
+    legend.text = element_text(size = 9)
+  )
+
+#Laver stikprøve-fordeling i procent
+sample_prop <- df_clean %>%
+  count(q4_kommune, name = "n") %>%
+  mutate(
+    kommune = gsub(" Kommune", "", q4_kommune),   #fjerner evt. "Kommune" i navnet
+    andel_sample = n / sum(n)                     #stikprøveandel (decimal)
+  )
+
+#Indlæser populationsdata
+pop_kommune_kort <- read_excel("ny_population.xlsx", sheet="Kommune")
+
+#Tjekker at navne stemmer overens
+unique(dk_map$NAME_2) #Vesthimmerland skal stemme overens
+
+pop_kommune_kort <- pop_kommune_kort %>%
+  mutate(kommune = if_else(kommune == "Vesthimmerlands", "Vesthimmerland", kommune))
+
+#Sammenligner
+sammenlign <- left_join(sample_prop, pop_kommune_kort, by = "kommune") %>%
+  mutate(
+    diff = andel_sample - andel   # positiv = overrepræsenteret i stikprøven
+  )
+
+#Joiner med kortet
+dk_map_merged <- dk_map %>%
+  left_join(sammenlign, by = c("NAME_2" = "kommune"))
+
+#Plotter
+#Med separat legend-nøgle
+library(ggnewscale)
+
+dk_map_merged2 <- dk_map %>%
+  left_join(sammenlign, by = c("NAME_2" = "kommune")) %>%
+  mutate(mangler = if_else(is.na(diff), "Mangler i stikprøven", "Har data"))
+
+ggplot() +
+  #Lag 1: manglende kommuner
+  geom_sf(
+    data = filter(dk_map_merged2, mangler == "Mangler i stikprøven"),
+    aes(fill = mangler),
+    color = "white", size = 0.2
+  ) +
+  scale_fill_manual(
+    values = c("Mangler i stikprøven" = "#F5C518"),
+    name = NULL
+  ) +
+  ggnewscale::new_scale_fill() +
+  #Lag 2: kommuner med data
+  geom_sf(
+    data = filter(dk_map_merged2, mangler == "Har data"),
+    aes(fill = diff * 100),
+    color = "white", size = 0.2
+  ) +
+  scale_fill_gradient2(
+    low = "#CA0020",
+    mid = "#F7F7F7",   # lys grå i stedet for hvid → tydeligere kontrast
+    high = "#0571B0",
+    midpoint = 0,
+    limits = c(-6, 10),
+    name = "Afvigelse i procentpoint\n(stikprøve - population)"
+  ) +
+  labs(
+    title = "Over- og underrepræsentation i stikprøven",
+    subtitle = "Sammenligning af stikprøvens og befolkningens andele pr. kommune",
+    caption = "Blå = overrepræsenteret, rød = underrepræsenteret, gul = ingen observationer",
+    x = NULL, y = NULL
+  ) +
+  theme_minimal(base_family = "Times") +
+  theme(
+    plot.title = element_text(size = 14),
+    legend.title = element_text(size = 10),
+    legend.text = element_text(size = 9),
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    axis.title = element_blank()
+  )
+
+#laver sammenligning af kommuner i stikprøve og population
+tab <- sammenlign %>%
+  mutate(
+    andel_sample = andel_sample * 100,
+    andel = andel * 100,
+    diff_pct = diff * 100
+  ) %>%
+  arrange(desc(abs(diff_pct))) %>%
+  select(kommune, andel_sample, andel, diff_pct) %>%
+  head(10) %>%
+  mutate(
+    andel_sample = round(andel_sample, 1),
+    andel = round(andel, 1),
+    diff_pct = round(diff_pct, 1)
+  )
+#pænere kolonnenavne
+colnames(tab) <- c("Kommune", "Andel i stikprøve (%)", "Andel i population (%)", "Forskel (pct.-point)")
+
+#gemmer som HTML
+stargazer(
+  tab,
+  type      = "html",
+  summary   = FALSE,
+  digits    = 3,
+  title     = "Top 10: Største forskelle i andele",
+  rownames  = FALSE,
+  out       = "sammenlign_top10.html"
+)
+
+#Ser hvilke kommuner der mangler
+manglende_kommuner <- tibble(
+  Kommune = setdiff(pop_kommune_kort$kommune, kommune_data$kommune_navn)
+)
+
+#Udskriver som tabel med stargazer
+stargazer(manglende_kommuner, type = "html",
+          title = "Kommuner uden observationer i stikprøven",
+          summary = FALSE,
+          out="manglende_kommuner.html")
+
+#UDDANNELSE
+table(df_clean$q5_uddannelse)
+str(df_clean$q5_uddannelse) #tjekker variabeltype: character
+
+#Omkoder uddannelse til ordinalskaleret faktorvariabel
+df_clean <- df_clean %>%
+  mutate(
+    q5_uddannelse = if_else(q5_uddannelse == "Anden uddannelse", NA_character_, q5_uddannelse), #koder anden uddannelse som NA, da den ikke kan indordnes på ordinalskala
+    udd_niveau = case_when( #gør til ordinalskaleret numerisk variabel
+      q5_uddannelse == "Ingen uddannelse" ~ 1,
+      q5_uddannelse == "Grundskole (f.eks. folkeskole, privatskole, efterskole)" ~ 2,
+      q5_uddannelse == "Gymnasial uddannelse (f.eks. STX, HHX, HTX, HF)" ~ 3,
+      q5_uddannelse == "Erhvervsuddannelse (f.eks. frisør, tømrer, sosu-assistent)" ~ 4,
+      q5_uddannelse == "Kort videregående uddannelse (under 3 år, f.eks. installatør, politibetjent, laborant)" ~ 5,
+      q5_uddannelse == "Mellemlang videregående uddannelse (3-4 år, f.eks. folkeskolelærer, sygeplejerske, pædagog)" ~ 6,
+      q5_uddannelse == "Bacheloruddannelse (f.eks. første del af en lang videregående uddannelse)" ~ 7,
+      q5_uddannelse == "Lang videregående uddannelse (f.eks. gymnasielærer, jurist, læge, kandidatgrad, MBA)" ~ 8,
+      q5_uddannelse == "Forskeruddannelse (f.eks. ph.d)" ~ 9,
+      TRUE ~ NA_real_
+    ),
+    udd_niveau = factor(udd_niveau, levels = 1:9, #omkoder til faktor-variabel
+                        labels = c(
+                          "Ingen",
+                          "Grundskole",
+                          "Gymnasial",
+                          "Erhvervsuddannelse",
+                          "Kort videregående",
+                          "Mellemlang videregående",
+                          "Bachelor",
+                          "Lang videregående",
+                          "Forsker"
+                        ),
+                        ordered = TRUE)
+  )
+
+#Tjekker resultat
+table(df_clean$udd_niveau)
+#Tjekker om den er ordinal
+str(df_clean$udd_niveau) #rigtig rækkefølge og antal niveauer og factor
+levels(df_clean$udd_niveau) #rigtige niveauer
+is.ordered(df_clean$udd_niveau) #TRUE, den er ordinal
+
+#STEMMEVALG
+table(df_clean$q6_stemmevalg)
+str(df_clean$q6_stemmevalg) #character
+df_clean$q6_stemmevalg <- as.factor(df_clean$q6_stemmevalg) #omkoder til factor
+
+#RESPONDENTENS SYN PÅ INDVANDRING
+table(df_clean$q7_respondent_indvandring)
+str(df_clean$q7_respondent_indvandring) #character
+df_clean$q7_respondent_indvandring <- as.factor(df_clean$q7_respondent_indvandring) #omkod til factor
+
+#RESPONDENTENS SYN PÅ KLIMAAFGIFTER
+table(df_clean$q8_respondent_klimaafgifter)
+str(df_clean$q8_respondent_klimaafgifter) #character
+df_clean$q8_respondent_klimaafgifter <- as.factor(df_clean$q8_respondent_klimaafgifter) #omkod til factor
+
+#OMKODNING AF KANDIDAT-VARIABLE
+
+#KANDIDATENS SYN PÅ INDVANDRING
+str(df_clean$kand_indvandring) #character-variabel. 
+str(df_clean$kand_klima) #character-variabel. 
+
+#Omkoder til factor-variable
+df_clean$kand_indvandring <- as.factor(df_clean$kand_indvandring)
+str(df_clean$kand_indvandring)
+levels(df_clean$kand_indvandring)
+table(df_clean$kand_indvandring)
+df_clean$kand_klima <- as.factor(df_clean$kand_klima)
+str(df_clean$kand_klima)
+levels(df_clean$kand_klima)
+table(df_clean$kand_klima)
+
+#Nu konstrueres en politisk-enighed variabel, som angiver hvorvidt respondenten og kandidaten har samme holdning på et politisk emne.
+# Politisk enighed – indvandring og klimaafgifter
+df_clean <- df_clean %>%
+  mutate(
+    enighed_indvandring = factor(
+      ifelse(q7_respondent_indvandring == kand_indvandring, 1, 0),
+      levels = c(0, 1),
+      labels = c("Uenig (indvandring)", "Enig (indvandring)")
+    ),
+    enighed_klimaafgifter = factor(
+      ifelse(q8_respondent_klimaafgifter == kand_klima, 1, 0),
+      levels = c(0, 1),
+      labels = c("Uenig (klima)", "Enig (klima)")
+    )
+  )
+
+table(df_clean$enighed_indvandring) #Respondenter er ca. enige med en tredjedel af kandidaterne
+
+table(df_clean$enighed_klimaafgifter) #Respondenter er ca. enige med en tredjedel af kandidaterne
+
+#Politisk enighed - samlet variabel
+#Numerisk sum af enighed på de to emner, 0=Uenige på begge, 1=Enige på ét, 2=Enige på begge
+df_clean$enighed_total <- rowSums(cbind(
+  df_clean$enighed_klimaafgifter == "Enig (klima)",
+  df_clean$enighed_indvandring   == "Enig (indvandring)"
+), na.rm = TRUE)
+
+#Kategoriserer
+df_clean$enighed_total_cat <- factor(
+  df_clean$enighed_total,
+  levels = c(0, 1, 2),
+  labels = c("Uenige på begge", "Enige på ét", "Enige på begge")
+)
+
+table(df_clean$enighed_total_cat)
+
+#Kandidatens syn på demokrati
+df_clean$kand_demokrati <- as.factor(df_clean$kand_demokrati)
+str(df_clean$kand_demokrati)
+levels(df_clean$kand_demokrati)
+table(df_clean$kand_demokrati)
+
+#Omkoder til en binær demokratisk/udemokratisk variabel
+df_clean <- df_clean %>%
+  mutate(
+    kand_demokrati_binær = case_when(
+      kand_demokrati %in% c(
+        "Medier bør altid frit kunne fremsætte kritik",
+        "Regeringen bør altid følge domstolenes afgørelser, uanset sagens karakter"
+      ) ~ 1L,
+      kand_demokrati %in% c(
+        "I krisetider bør myndighederne kunne begrænse mediers mulighed for at fremsætte kritik",
+        "Regeringen bør kunne tilsidesætte domstolenes afgørelser i sager om national sikkerhed"
+      ) ~ 0L
+    )
+  )
+
+#Laver den binære variabel til faktor 
+df_clean$kand_demokrati_binær <- factor(
+  df_clean$kand_demokrati_binær,
+  levels = c(0, 1),
+  labels = c("Udemokratisk", "Demokratisk")
+)
+
+#Sætter demokratisk som referencekategori(baseline)
+df_clean$kand_demokrati_binær <- relevel(df_clean$kand_demokrati_binær, ref = "Demokratisk")
+
+#ser fordelingen af demokratiske / udemokratiske kandidater
+table(df_clean$kand_demokrati_binær) #stort set 50/50
+
+#visualiserer fordelingen
+ggplot(df_clean, aes(x = factor(kand_demokrati_binær,
+                                labels = c("Udemokratisk", "Demokratisk")))) +
+  geom_bar(fill = "#2E86AB") +
+  labs(x = "Demokratisk orientering", y = "Antal kandidater")
+
+#Kandidatens køn - tjek og omkodning til faktor
+df_clean$kand_køn <- as.factor(df_clean$kand_køn)
+str(df_clean$kand_køn)
+levels(df_clean$kand_køn)
+table(df_clean$kand_køn)
+
+#Kandidatens regeringserfaring - tjek og omkodning til faktor
+df_clean$kand_regering <- as.factor(df_clean$kand_regering)
+str(df_clean$kand_regering)
+levels(df_clean$kand_regering)
+table(df_clean$kand_regering)
+
+#Omkodning af indeks
+#Hver indikator i datasættet består af fem dummy-variabler med svarmuligheder - med 6 indikatorer er det 30 dummies.
+#De omkodes til indikatorer med 1-5 scorer.
+
+index_columns <- c("q9_1_1","q9_1_2","q9_1_3","q9_1_4","q9_1_5",
+                   "q9_2_1","q9_2_2","q9_2_3","q9_2_4","q9_2_5",
+                   "q9_3_1","q9_3_2","q9_3_3","q9_3_4","q9_3_5",
+                   "q9_4_1","q9_4_2","q9_4_3","q9_4_4","q9_4_5",
+                   "q9_5_1","q9_5_2","q9_5_3","q9_5_4","q9_5_5",
+                   "q9_6_1","q9_6_2","q9_6_3","q9_6_4","q9_6_5")
+
+#Laver en funktion, der samler de fem binære dummies til en variabel
+chosen_number <- function(.data, cols) {
+  #Tager de fem dummy kolonner, der skal bruges
+  m <- as.matrix(dplyr::select(.data, dplyr::all_of(cols)))
+  
+  #Finder kolonnenummer med "1" i hver række
+  max.col(m, ties.method = "first")
+}
+
+#Spørgsmål 1: Jeg stoler på, at danskernes holdninger bliver repræsenteret af politikerne
+columns_q1 <- c("q9_1_1", "q9_1_2", "q9_1_3", "q9_1_4", "q9_1_5")
+df_clean$q9_1_holdninger_repræsenteret <- chosen_number(df_clean, columns_q1)
+
+#Spørgsmål 2: Jeg har generelt tillid til ministrenes arbejde
+df_clean$q9_2_tillid_ministre <- chosen_number(df_clean, c("q9_2_1", "q9_2_2", "q9_2_3", "q9_2_4", "q9_2_5"))
+
+#Spørgsmål 3: Jeg har generelt tillid til de politiske partier
+df_clean$q9_3_tillid_partier <- chosen_number(df_clean, c("q9_3_1", "q9_3_2", "q9_3_3", "q9_3_4", "q9_3_5"))
+
+#Spørgsmål 4: Jeg har svært ved at stole på de danske politikere
+df_clean$q9_4_stole_politikere <- chosen_number(df_clean, c("q9_4_1", "q9_4_2", "q9_4_3", "q9_4_4", "q9_4_5"))
+
+#Spørgsmål 5: Jeg oplever, at danske regeringer tilsidesætter befolkningens interesser
+df_clean$q9_5_regeringer_tilsidesætter <- chosen_number(df_clean, c("q9_5_1", "q9_5_2", "q9_5_3", "q9_5_4", "q9_5_5"))
+
+#Spørgsmål 6: Jeg oplever, at de politiske partier tilsidesætter befolkningens interesser
+df_clean$q9_6_partier_tilsidesætter <- chosen_number(df_clean, c("q9_6_1", "q9_6_2", "q9_6_3", "q9_6_4", "q9_6_5"))
+
+#Nu har hver respondent-række et tal, der angiver, hvilken svarmulighed, de har valgt ved hvert spørgsmål
+
+#Nu skal vi omkode de negativt formulerede spørgsmål 4, 5, og 6, så alle høje tal afspejler høj politisk tillid.
+df_clean <- df_clean %>%
+  mutate(
+    q9_4_stole_politikere_pos       = 6 - q9_4_stole_politikere, #trækker fra 6 for at vende omvendt
+    q9_5_regeringer_tilsidesætter_pos = 6 - q9_5_regeringer_tilsidesætter,
+    q9_6_partier_tilsidesætter_pos    = 6 - q9_6_partier_tilsidesætter
+  )
+
+#Nu skal tillids-indekset bygges. Alle seks indikatorer skal indgå med samme vægt
+
+#Konstruerer først et rent additivt indeks
+df_clean <- df_clean %>%
+  mutate(
+    tillids_indeks_additiv = rowSums(across(
+      c(q9_1_holdninger_repræsenteret,
+        q9_2_tillid_ministre,
+        q9_3_tillid_partier,
+        q9_4_stole_politikere_pos,
+        q9_5_regeringer_tilsidesætter_pos,
+        q9_6_partier_tilsidesætter_pos)
+    ), na.rm = TRUE)
+  )
+
+table(df_clean$tillids_indeks_additiv) #tjekker
+df_clean$tillids_indeks_additiv #tjekker
+
+#Prøver at konstruere et multiplikativt indeks for at sammenligne
+df_clean <- df_clean %>%
+  #Omkoder alle indikatorers spændvidde fra 1–5 til 0–1
+  mutate(across(
+    c(q9_1_holdninger_repræsenteret,
+      q9_2_tillid_ministre,
+      q9_3_tillid_partier,
+      q9_4_stole_politikere_pos,
+      q9_5_regeringer_tilsidesætter_pos,
+      q9_6_partier_tilsidesætter_pos),
+    ~ (. - 1) / 4,   # (1→0, 5→1)
+    .names = "{.col}_norm"
+  )) %>%
+  #Beregner multiplikativt indeks (produktet af alle omkodede komponenter)
+  mutate(
+    tillids_indeks_multiplikativ = apply(across(ends_with("_norm")), 1, prod, na.rm = TRUE)
+  )
+
+#tjekker resultatet
+df_clean$tillids_indeks_multiplikativ
+summary(df_clean$tillids_indeks_multiplikativ)
+sd(df_clean$tillids_indeks_multiplikativ)
+hist(df_clean$tillids_indeks_multiplikativ)
+
+#sammenligner med additivt ved også at omkode det til 0-1
+df_clean <- df_clean %>%
+  mutate(tillids_indeks_additiv_skaleret = (tillids_indeks_additiv - 6) / (30 - 6))
+summary(df_clean$tillids_indeks_additiv_skaleret)
+sd(df_clean$tillids_indeks_additiv_skaleret)
+hist(df_clean$tillids_indeks_additiv_skaleret)
+
+#måler rangkorrelation
+cor(df_clean$tillids_indeks_additiv_skaleret, df_clean$tillids_indeks_multiplikativ, method = "spearman", use = "complete.obs")
+#Meget høj rangkorrelation på 0.94 -> de to indeks rangerer respondenter næsten ens.
+
+#Sammenligner det additive og det multiplikative indeks ved en korrelationsanalyse
+cor(df_clean$tillids_indeks_additiv_skaleret, df_clean$tillids_indeks_multiplikativ, use = "complete.obs")
+#Kun moderat lineær korrelation på 0.72 → forholdet mellem værdierne er ikke-lineært (buet).
+#Lavere korrelation tyder på, at multiplikativt indeks reagerer stærkere på lave scorer (non-kompenserende effekt).
+
+#Tester hvilket indeks der indfanger mest variation
+sd(df_clean$tillids_indeks_additiv_skaleret, na.rm = TRUE) #0.25
+sd(df_clean$tillids_indeks_multiplikativ, na.rm = TRUE) #0.19
+
+#Vælger at beholde det additive indeks.
+#Omkoder ikke til respondentniveau, da respondenters svar på tillids-spørgsmål er konstant over de 12 rækker per person.
+
+#Deskriptiv analyse/fordelingsanalyse af det additive indeks:
+#Jeg vil undersgøge den centrale tendens, spredningen og frekvensfordelingen.
+
+#gennemsnit, standardafvigelse
+library(psych)
+describe(df_clean$tillids_indeks_additiv_skaleret)#gennemsnit er 0.53, median er 0.54, sd er 0.25.
+
+#Eksporterer
+library(gt)
+describe(df_clean$tillids_indeks_additiv_skaleret) %>%
+  gt() %>%
+  fmt_number(columns = everything(), decimals = 2) %>%
+  tab_header(
+    title = "Deskriptiv statistik for tillidsindeks (additivt, skaleret)"
+  )
+
+#Visualisering af politisk tillid-indeks - andel af respondenter
+plot_fordelingsanalyse <- ggplot(df_clean, aes(x = tillids_indeks_additiv_skaleret)) +
+  geom_histogram(
+    aes(y = after_stat((count / sum(count)) * 100)),
+    binwidth = 0.1,
+    fill = "#2E86AB", color = "white", alpha = 0.9
+  ) +
+  labs(
+    title = "Fordeling af politisk tillid",
+    x = "Tillidsniveau (0–1)",
+    y = "Andel af respondenter (%)"
+  ) +
+  theme_classic(base_size = 14, base_family = "Times") +
+  theme(
+    plot.title = element_text(face = "bold"),
+    axis.title = element_text(face = "bold"),
+    panel.grid = element_blank()
+  )
+
+#gemmer plot
+ggsave(filename="tillid_fordelingsanalyse.png",
+       plot=plot_fordelingsanalyse,
+       path="/Users/lineamarie/Desktop/Speciale data/Figurer",
+       width=6,
+       height=4,
+       dpi=320) #dots per inch/pixels per tomme (opløsning)
+
+summary(df_clean[, c(
+  "q9_1_holdninger_repræsenteret",
+  "q9_2_tillid_ministre",
+  "q9_3_tillid_partier",
+  "q9_4_stole_politikere_pos",
+  "q9_5_regeringer_tilsidesætter_pos",
+  "q9_6_partier_tilsidesætter_pos"
+)])
+
+#tester ikke for reliabilitet, da der ikke laves statistiske tests for formativt indeks
+
+######REPRÆSENTATIVITET######
+#Stikprøvens sammensætning sammenlignes med populationen, den danske befolkning - data fra Danmarks Statistik
+
+#Først kodes de samme kategorier som fra Danmarks statistik - hentes fra excel-ark
+pop_alder <- read_excel("ny_population.xlsx", sheet="Alder")
+pop_køn <- read_excel("ny_population.xlsx", sheet="Køn")
+pop_kommune <- read_excel("ny_population.xlsx", sheet="Kommune")
+pop_region <- read_excel("ny_population.xlsx", sheet="Region")
+pop_uddannelse <- read_excel("ny_population.xlsx", sheet="Uddannelse")
+pop_partivalg <- read_excel("ny_population.xlsx", sheet="Partivalg")
+
+#KØN - omkoder til andel
+# Populationens fordeling
+pop_køn <- tibble::tribble(
+  ~køn,       ~andel_befolkning,
+  "Kvinde",   0.507,
+  "Mand",     0.493
+)
+
+#Stikprøvens fordeling
+sample_køn <- df_clean %>%
+  count(q2_køn) %>%
+  rename(køn = q2_køn) %>%
+  mutate(andel_sample = n / sum(n))
+
+N_sample <- nrow(df_clean)
+
+#Kombinerer population og stikprøve
+sammenlign_køn <- pop_køn %>%
+  left_join(sample_køn, by = "køn") %>%
+  mutate(
+    forskel = (andel_sample - andel_befolkning) * 100,
+    p_pop  = andel_befolkning,
+    p_samp = andel_sample,
+    se_diff = sqrt(
+      (p_pop * (1 - p_pop)) / 4873198 + #N i populationen
+        (p_samp * (1 - p_samp)) / N_sample
+    ),
+    z = (p_samp - p_pop) / se_diff,
+    p = 2 * (1 - pnorm(abs(z))),
+    sig = case_when(
+      p < 0.001 ~ "***",
+      p < 0.01  ~ "**",
+      p < 0.05  ~ "*",
+      TRUE ~ ""
+    )
+  )
+
+sammenlign_køn
+
+#ALDER - omkoder til aldersgrupper og andel
+levels_alder <- c("18-29 år","30-39 år","40-49 år","50-59 år","60-69 år","70+ år")
+
+pop_alder_grupperet <- pop_alder %>%
+  #Fjerner ikke-aldersrækker
+  filter(!grepl("total|i alt", tolower(alder))) %>%
+  #Trækker alder som tal
+  mutate(alder_num = as.numeric(gsub("\\D+", "", alder))) %>%
+  filter(!is.na(alder_num)) %>%        # sikkerhed
+  #Danner aldersgrupper
+  mutate(
+    aldergruppe = case_when(
+      alder_num >= 18 & alder_num <= 29 ~ "18-29 år",
+      alder_num >= 30 & alder_num <= 39 ~ "30-39 år",
+      alder_num >= 40 & alder_num <= 49 ~ "40-49 år",
+      alder_num >= 50 & alder_num <= 59 ~ "50-59 år",
+      alder_num >= 60 & alder_num <= 69 ~ "60-69 år",
+      alder_num >= 70                   ~ "70+ år",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  filter(!is.na(aldergruppe)) %>% #Fjerner evt. resterende NA
+  group_by(aldergruppe) %>%
+  summarise(antal = sum(antal), .groups = "drop") %>%
+  mutate(
+    andel_befolkning = antal / sum(antal),
+    aldergruppe = factor(aldergruppe, levels = levels_alder)
+  ) %>%
+  arrange(aldergruppe)
+
+#populations N (danske statsborgere 18+)
+N_pop <- sum(pop_alder_grupperet$antal)
+
+#Grupperer stikprøven på samme måde
+sample_alder <- df_clean %>%
+  mutate(
+    alder_num = as.numeric(q3_alder),
+    aldergruppe = case_when(
+      alder_num >= 18 & alder_num <= 29 ~ "18-29 år",
+      alder_num >= 30 & alder_num <= 39 ~ "30-39 år",
+      alder_num >= 40 & alder_num <= 49 ~ "40-49 år",
+      alder_num >= 50 & alder_num <= 59 ~ "50-59 år",
+      alder_num >= 60 & alder_num <= 69 ~ "60-69 år",
+      alder_num >= 70                   ~ "70+ år",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  filter(!is.na(aldergruppe)) %>%
+  count(aldergruppe) %>%
+  mutate(andel_sample = n / sum(n))
+
+#Sammenligner population og stikprøve
+N_sample <- nrow(df_clean)
+sammenlign_alder <- pop_alder_grupperet %>%
+  left_join(sample_alder, by = "aldergruppe") %>%
+  mutate(
+    forskel = (andel_sample - andel_befolkning) * 100,   #forskel i procentpoint
+    p_pop  = andel_befolkning,
+    p_samp = andel_sample,
+    se_diff = sqrt(
+      (p_pop * (1 - p_pop)) / N_pop +   #populationens N
+        (p_samp * (1 - p_samp)) / N_sample
+    ),
+    z = (p_samp - p_pop) / se_diff,
+    p = 2 * (1 - pnorm(abs(z))),
+    sig = case_when(
+      p < 0.001 ~ "***",
+      p < 0.01  ~ "**",
+      p < 0.05  ~ "*",
+      TRUE ~ ""
+    )
+  )
+
+#Ser resultatet
+sammenlign_alder
+
+#UDDANNELSE
+#matcher stikprøvens tekst til populationens kode 
+map_udd <- tribble(
+  ~q5_uddannelse, ~kode,
+  "Ingen uddannelse", "H1001 Ingen uddannelse",
+  "Grundskole (f.eks. folkeskole, privatskole, efterskole)", "H10 Grundskole",
+  "Gymnasial uddannelse (f.eks. STX, HHX, HTX, HF)", "H20 Gymnasiale uddannelser",
+  "Erhvervsuddannelse (f.eks. frisør, tømrer, sosu-assistent)", "H30 Erhvervsfaglige uddannelser",
+  "Kort videregående uddannelse (under 3 år, f.eks. installatør, politibetjent, laborant)", "H40 Korte videregående uddannelser, KVU",
+  "Mellemlang videregående uddannelse (3-4 år, f.eks. folkeskolelærer, sygeplejerske, pædagog)", "H50 Mellemlange videregående uddannelser, MVU",
+  "Bacheloruddannelse (f.eks. første del af en lang videregående uddannelse)", "H60 Bacheloruddannelser, BACH",
+  "Lang videregående uddannelse (f.eks. gymnasielærer, jurist, læge, kandidatgrad, MBA)", "H70 Lange videregående uddannelser, LVU",
+  "Forskeruddannelse (f.eks. ph.d)", "H80 Ph.d. og forskeruddannelser"
+)
+
+#Klargør populationen (fjerner total)
+pop_uddannelse_clean <- pop_uddannelse %>%
+  filter(!grepl("total", tolower(højest_fuldførte_uddannelse))) %>%
+  select(kode = højest_fuldførte_uddannelse, antal, andel)
+
+#Beregner stikprøvefordeling og matcher med populationen
+sample_udd <- df_clean %>%
+  count(q5_uddannelse) %>%
+  left_join(map_udd, by = "q5_uddannelse") %>%
+  group_by(kode) %>%
+  summarise(n = sum(n), .groups = "drop") %>%
+  mutate(andel_sample = n / sum(n))
+
+#Sammenligner stikprøve og population + test
+N_sample <- nrow(df_clean)
+
+#beregner populationsstørrelse
+N_pop_udd <- sum(pop_uddannelse_clean$antal)
+
+sammenlign_udd <- pop_uddannelse_clean %>%
+  left_join(sample_udd, by = "kode") %>%
+  mutate(
+    forskel = (andel_sample - andel) * 100,
+    p_pop  = andel,
+    p_samp = andel_sample,
+    se_diff = sqrt(
+      (p_pop * (1 - p_pop)) / N_pop_udd +  #populations N
+        (p_samp * (1 - p_samp)) / N_sample
+    ),
+    z = (p_samp - p_pop) / se_diff,
+    p = 2 * (1 - pnorm(abs(z))),
+    sig = case_when(
+      p < 0.001 ~ "***",
+      p < 0.01  ~ "**",
+      p < 0.05  ~ "*",
+      TRUE ~ ""
+    )
+  ) %>%
+  select(kode, antal, andel_befolkning = andel, n, andel_sample, forskel, z, p, sig)
+
+sammenlign_udd
+
+#REGION
+table(df_clean$q4_kommune)
+
+#Inddeler kommuner i regioner
+kommune_region <- tribble( 
+  ~kommune,                ~region,
+  #Region Hovedstaden
+  "København",             "Hovedstaden",
+  "Frederiksberg",         "Hovedstaden",
+  "Albertslund",           "Hovedstaden",
+  "Allerød",               "Hovedstaden",
+  "Ballerup",              "Hovedstaden",
+  "Bornholm",              "Hovedstaden",
+  "Brøndby",               "Hovedstaden",
+  "Dragør",                "Hovedstaden",
+  "Egedal",                "Hovedstaden",
+  "Fredensborg",           "Hovedstaden",
+  "Frederikssund",         "Hovedstaden",
+  "Furesø",                "Hovedstaden",
+  "Gentofte",              "Hovedstaden",
+  "Gladsaxe",              "Hovedstaden",
+  "Glostrup",              "Hovedstaden",
+  "Gribskov",              "Hovedstaden",
+  "Halsnæs",               "Hovedstaden",
+  "Helsingør",             "Hovedstaden",
+  "Herlev",                "Hovedstaden",
+  "Hillerød",              "Hovedstaden",
+  "Hvidovre",              "Hovedstaden",
+  "Høje-Taastrup",         "Hovedstaden",
+  "Hørsholm",              "Hovedstaden",
+  "Ishøj",                 "Hovedstaden",
+  "Lyngby-Taarbæk",        "Hovedstaden",
+  "Rødovre",               "Hovedstaden",
+  "Rudersdal",             "Hovedstaden",
+  "Tårnby",                "Hovedstaden",
+  "Vallensbæk",            "Hovedstaden",
+  
+  #Region Sjælland
+  "Faxe",                  "Sjælland",
+  "Greve",                 "Sjælland",
+  "Guldborgsund",          "Sjælland",
+  "Holbæk",                "Sjælland",
+  "Kalundborg",            "Sjælland",
+  "Køge",                  "Sjælland",
+  "Lejre",                 "Sjælland",
+  "Lolland",               "Sjælland",
+  "Næstved",               "Sjælland",
+  "Odsherred",             "Sjælland",
+  "Ringsted",              "Sjælland",
+  "Roskilde",              "Sjælland",
+  "Slagelse",              "Sjælland",
+  "Solrød",                "Sjælland",
+  "Sorø",                  "Sjælland",
+  "Stevns",                "Sjælland",
+  "Vordingborg",           "Sjælland",
+  
+  #Region Syddanmark
+  "Assens",                "Syddanmark",
+  "Billund",               "Syddanmark",
+  "Esbjerg",               "Syddanmark",
+  "Fanø",                  "Syddanmark",
+  "Fredericia",            "Syddanmark",
+  "Faaborg-Midtfyn",       "Syddanmark",
+  "Haderslev",             "Syddanmark",
+  "Kerteminde",            "Syddanmark",
+  "Kolding",               "Syddanmark",
+  "Langeland",             "Syddanmark",
+  "Middelfart",            "Syddanmark",
+  "Nordfyns",              "Syddanmark",
+  "Nyborg",                "Syddanmark",
+  "Odense",                "Syddanmark",
+  "Svendborg",             "Syddanmark",
+  "Sønderborg",            "Syddanmark",
+  "Tønder",                "Syddanmark",
+  "Varde",                 "Syddanmark",
+  "Vejen",                 "Syddanmark",
+  "Vejle",                 "Syddanmark",
+  "Ærø",                   "Syddanmark",
+  "Aabenraa",              "Syddanmark",
+  
+  #Region Midtjylland
+  "Favrskov",              "Midtjylland",
+  "Hedensted",             "Midtjylland",
+  "Herning",               "Midtjylland",
+  "Holstebro",             "Midtjylland",
+  "Horsens",               "Midtjylland",
+  "Ikast-Brande",          "Midtjylland",
+  "Lemvig",                "Midtjylland",
+  "Norddjurs",             "Midtjylland",
+  "Odder",                 "Midtjylland",
+  "Randers",               "Midtjylland",
+  "Ringkøbing-Skjern",     "Midtjylland",
+  "Samsø",                 "Midtjylland",
+  "Silkeborg",             "Midtjylland",
+  "Skanderborg",           "Midtjylland",
+  "Skive",                 "Midtjylland",
+  "Struer",                "Midtjylland",
+  "Syddjurs",              "Midtjylland",
+  "Viborg",                "Midtjylland",
+  "Aarhus",                "Midtjylland",
+  
+  #Region Nordjylland
+  "Aalborg",               "Nordjylland",
+  "Brønderslev",           "Nordjylland",
+  "Frederikshavn",         "Nordjylland",
+  "Hjørring",              "Nordjylland",
+  "Jammerbugt",            "Nordjylland",
+  "Læsø",                  "Nordjylland",
+  "Mariagerfjord",         "Nordjylland",
+  "Morsø",                 "Nordjylland",
+  "Rebild",                "Nordjylland",
+  "Thisted",               "Nordjylland",
+  "Vesthimmerlands",       "Nordjylland"
+)
+
+#Renser pop_region og fjerner total
+pop_region_clean <- pop_region %>%
+  filter(!grepl("total", tolower(region))) %>%
+  select(region, andel_befolkning = andel)
+
+#Aggregerer stikprøven til regionsniveau
+sample_region <- df_clean %>%
+  mutate(q4_kommune = str_squish(q4_kommune)) %>%
+  left_join(kommune_region, by = c("q4_kommune" = "kommune")) %>%
+  count(region) %>%
+  mutate(andel_sample = n / sum(n))
+
+#Tjekker om alle kommuner  blev matchet:
+ikke_matchet <- setdiff(unique(df_clean$q4_kommune), kommune_region$kommune)
+ikke_matchet
+
+#Sammenligner population vs. stikprøve 
+pop_region_clean <- pop_region %>%
+  filter(tolower(region) != "total") %>%
+  mutate(region = sub("^Region\\s+", "", region)) %>%   #fjerner "Region"
+  rename(andel_befolkning = andel) 
+
+N_sample <- nrow(df_clean)
+
+
+sammenlign_region <- pop_region_clean %>%
+  left_join(sample_region, by = "region") %>%
+  mutate(
+    forskel = (andel_sample - andel_befolkning) * 100,
+    p_pop  = andel_befolkning,
+    p_samp = andel_sample,
+    se_diff = sqrt(
+      (p_pop * (1 - p_pop)) / N_pop +   #N_pop = populations N
+        (p_samp * (1 - p_samp)) / N_sample
+    ),
+    z = (p_samp - p_pop) / se_diff,
+    p = 2 * (1 - pnorm(abs(z))),
+    sig = dplyr::case_when(
+      p < 0.001 ~ "***",
+      p < 0.01  ~ "**",
+      p < 0.05  ~ "*",
+      TRUE ~ ""
+    )
+  ) %>%
+  select(region, andel_befolkning, andel_sample, forskel, z, p, sig)
+
+sammenlign_region
+
+#PARTIVALG - populationens vs. stikprøvens partifordeling
+
+#Klargør populationtabellen - fjerner total
+pop_partivalg_clean <- pop_partivalg %>%
+  filter(!grepl("Total", Parti, ignore.case = TRUE)) %>%
+  rename(andel_befolkning = Procentfordeling)
+
+#Beregner stikprøvens partifordeling
+sample_partivalg <- df_clean %>%
+  count(q6_stemmevalg) %>%
+  rename(Parti = q6_stemmevalg) %>%
+  mutate(andel_sample = n / sum(n))
+
+#Sammenligner population og stikprøve
+N_sample <- nrow(df_clean)
+
+sammenlign_partivalg <- pop_partivalg_clean %>%
+  left_join(sample_partivalg, by = "Parti") %>%
+  mutate(
+    andel_sample = replace_na(andel_sample, 0),
+    forskel = (andel_sample - andel_befolkning) * 100,
+    p_pop  = andel_befolkning,
+    p_samp = andel_sample,
+    se_diff = sqrt(
+      (p_pop * (1 - p_pop)) / 4733 + #N i populationen
+        (p_samp * (1 - p_samp)) / N_sample
+    ),
+    z = (p_samp - p_pop) / se_diff,
+    p = 2 * (1 - pnorm(abs(z))),
+    sig = case_when(
+      p < 0.001 ~ "***",
+      p < 0.01  ~ "**",
+      p < 0.05  ~ "*",
+      TRUE ~ ""
+    )
+  )
+
+#DOWNLOADER TIL REPRÆSENTATIVITETSTABEL - Samler kun de vigtigste kolonner for hver tabel
+region <- sammenlign_region %>%
+  select(Kategori = region,
+         Population = andel_befolkning,
+         Stikprøve = andel_sample,
+         Forskel = forskel,
+         Signifikans = sig) %>%
+  mutate(Gruppe = "Region")
+
+køn <- sammenlign_køn %>%
+  select(Kategori = køn,
+         Population = p_pop,
+         Stikprøve = p_samp,
+         Signifikans = sig) %>%
+  mutate(Forskel = (Stikprøve - Population) * 100,
+         Gruppe = "Køn")
+
+
+alder <- sammenlign_alder %>%
+  select(Kategori = aldergruppe,
+         Population = p_pop,
+         Stikprøve = p_samp,
+         Signifikans = sig) %>%
+  mutate(Forskel = (Stikprøve - Population)*100,
+         Gruppe = "Alder")
+
+udd <- sammenlign_udd %>%
+  filter(!grepl("Uoplyst", kode, ignore.case = TRUE)) %>%
+  mutate(Kategori = sub("^H\\d+\\s*", "", kode)) %>%
+  select(Kategori,
+         Population = andel_befolkning,
+         Stikprøve = andel_sample,
+         Forskel = forskel,
+         Signifikans = sig) %>%
+  mutate(Gruppe = "Uddannelse")
+
+parti <- sammenlign_partivalg %>%
+  select(Kategori = Parti,
+         Population = andel_befolkning,
+         Stikprøve = andel_sample,
+         Forskel = forskel,
+         Signifikans = sig) %>%
+  mutate(Gruppe = "Partivalg")
+
+#Samler alt i én fil
+repr <- bind_rows(region, køn, alder, udd, parti)
+
+#Gemmer som CSV (kan åbnes direkte i Excel)
+write.csv(repr, "repræsentativitet_tabel.csv", row.names = FALSE)
+
+
+
+######################
+####SELVE ANALYSEN####
+######################
+
+
+
+
+####GENERELLE CONJOINT-ESTIMATER######
+library(cregg)
+library(cjoint)
+library(emmeans)
+library(forcats)
+library(broom)
+
+#Konstruerer en Pair ID-variabel, som angiver de to kandidat-alternativer, der blev vist sammen
+df_clean$pair_id <- paste0(as.character(df_clean$participant_id), "-", as.character(df_clean$qes))
+df_clean %>% select(participant_id, qes, pair_id)
+
+#Conjoint-analyse: Udregner effekten af de forskellige attributter på sandsynligheden for kandidatvalg
+
+#Først laves variablerne til faktorer
+df_clean <- df_clean %>%
+  mutate(
+    q7_respondent_indvandring   = factor(q7_respondent_indvandring),
+    kand_indvandring            = factor(kand_indvandring),
+    q8_respondent_klimaafgifter = factor(q8_respondent_klimaafgifter),
+    kand_klima                  = factor(kand_klima)
+  )
+
+#Så omdøbes levels både for respondent og kandidat 
+df_clean <- df_clean %>%
+  mutate(
+    # Indvandring
+    q7_respondent_indvandring = fct_recode(
+      q7_respondent_indvandring,
+      "Færre indvandrere"        = "Danmark bør tage imod færre indvandrere end i dag",
+      "Samme antal indvandrere"  = "Danmark bør tage imod samme antal indvandrere som i dag",
+      "Flere indvandrere"        = "Danmark bør tage imod flere indvandrere end i dag"
+    ) |> fct_relevel("Færre indvandrere", "Samme antal indvandrere", "Flere indvandrere"),
+    
+    kand_indvandring = fct_recode(
+      kand_indvandring,
+      "Færre indvandrere"        = "Danmark bør tage imod færre indvandrere end i dag",
+      "Samme antal indvandrere"  = "Danmark bør tage imod samme antal indvandrere som i dag",
+      "Flere indvandrere"        = "Danmark bør tage imod flere indvandrere end i dag"
+    ) |> fct_relevel("Færre indvandrere", "Samme antal indvandrere", "Flere indvandrere"),
+    
+    # Klimaafgifter
+    q8_respondent_klimaafgifter = fct_recode(
+      q8_respondent_klimaafgifter,
+      "Færre klimaafgifter"      = "Danmark bør have færre klimaafgifter end i dag",
+      "Samme klimaafgifter"      = "Danmark bør have samme antal klimaafgifter som i dag",
+      "Flere klimaafgifter"      = "Danmark bør have flere klimaafgifter end i dag"
+    ) |> fct_relevel("Færre klimaafgifter", "Samme klimaafgifter", "Flere klimaafgifter"),
+    
+    kand_klima = fct_recode(
+      kand_klima,
+      "Færre klimaafgifter"      = "Danmark bør have færre klimaafgifter end i dag",
+      "Samme klimaafgifter"      = "Danmark bør have samme antal klimaafgifter som i dag",
+      "Flere klimaafgifter"      = "Danmark bør have flere klimaafgifter end i dag"
+    ) |> fct_relevel("Færre klimaafgifter", "Samme klimaafgifter", "Flere klimaafgifter")
+  )
+
+#Og omdøber levels for demokrati-labels 
+df_clean <- df_clean %>%
+  mutate(
+    kand_demokrati = fct_recode(
+      kand_demokrati,
+      "Myndighederne bør kunne begrænse medier"   = "I krisetider bør myndighederne kunne begrænse mediers mulighed for at fremsætte kritik",
+      "Regeringen bør kunne tilsidesætte domstole" = "Regeringen bør kunne tilsidesætte domstolenes afgørelser i sager om national sikkerhed",
+      "Medier bør frit kunne kritisere"  = "Medier bør altid frit kunne fremsætte kritik",
+      "Regeringen bør altid følge domstole"    = "Regeringen bør altid følge domstolenes afgørelser, uanset sagens karakter"
+    ) |> 
+      fct_relevel("Begrænse medier", "Tilsidesætte domstole", "Frit mediekritik", "Følge domstole")
+  )
+
+#Tilføjer labels til hver kandidat-attribut til plots
+attr(df_clean$kand_indvandring, "label") <- "Syn på indvandring"
+attr(df_clean$kand_klima, "label") <- "Syn på klimaafgifter"
+attr(df_clean$kand_demokrati, "label") <- "Syn på demokrati"
+attr(df_clean$kand_køn, "label") <- "Køn"
+attr(df_clean$kand_regering, "label") <- "Regeringserfaring"
+
+#Laver en marginal means model for den generelle conjointanalyse
+conjoint_generel <- cj(data=df_clean,
+                       formula = choice ~ kand_indvandring + kand_klima + kand_demokrati + 
+                         kand_køn + kand_regering,
+                       id=~participant_id,
+                       estimate="mm",
+                       h0=0.5)
+
+conjoint_generel
+
+#laver tabel til stargazer
+tab <- conjoint_generel %>%
+  transmute(
+    feature, level,
+    estimate = round(estimate, 3),
+    `95% KI` = sprintf("[%.3f, %.3f]", lower, upper),
+    `p-værdi` = ifelse(p < 0.001, "<0.001", sprintf("%.3f", p))
+  )
+
+stargazer(tab,
+          type = "html",
+          summary = FALSE,
+          rownames = FALSE,
+          title = "Generel conjointanalyse (spredte labels): Marginal Means",
+          out = "conjoint_mm_ci_p.html")
+
+#Visualiserer de generelle conjointestimater - spredte kategorier
+plot_generel <- conjoint_generel %>%
+  ggplot(., aes(x=estimate, y=reorder(level,desc(level))))+
+  geom_vline(xintercept=0.5, linetype="longdash")+
+  geom_errorbarh(aes(xmin=lower, xmax=upper),
+                 height=0.5)+
+  geom_point(fill="black")+
+  xlab("Sandsynlighed for præference for kandidat (marginal means)")+
+  ylab("")+
+  facet_grid(feature~.,
+             scales="free_y",space="free_y")
+plot_generel 
+
+#gemmer plot
+ggsave(filename="plot_generel.png",
+plot=plot_generel,
+path="/Users/lineamarie/Desktop/Speciale data/Figurer",
+width=8,
+height=8,
+dpi=320) #dots per inch/pixels per tomme (opløsning)
+
+#Laver en ny mm-model, hvor jeg udregner generelle conjoint-estimater på de samlede kategorier (politisk enighed x2 + den binære demokrati-variabel)
+
+#Laver labels til plots
+attr(df_clean$enighed_indvandring, "label") <- "Enighed om indvandring"
+attr(df_clean$enighed_klimaafgifter, "label") <- "Enighed om klimaafgifter"
+attr(df_clean$kand_demokrati_binær, "label") <- "Syn på demokrati"
+
+conjoint_generel_samlet <- cj(data=df_clean,
+                       formula = choice ~ enighed_indvandring + enighed_klimaafgifter + kand_demokrati_binær + 
+                         kand_køn + kand_regering,
+                       id=~participant_id,
+                       estimate="mm",
+                       h0=0.5)
+
+summary(conjoint_generel_samlet)
+
+#Gemmer modeloutput
+tab_samlet <- conjoint_generel_samlet %>%
+  transmute(
+    feature, level,
+    estimate = round(estimate, 3),
+    `95% KI` = sprintf("[%.3f, %.3f]", lower, upper),
+    `p-værdi` = ifelse(p < 0.001, "<0.001", sprintf("%.3f", p))
+  )
+
+stargazer(tab_samlet,
+          type = "html",
+          summary = FALSE,
+          rownames = FALSE,
+          title = "Generel conjointanalyse (samlede labels): Marginal Means",
+          out = "conjoint_samlet_mm.html")
+
+
+#Visualiserer de generelle conjointestimater - samlede kategorier
+plot_generel_samlet <- conjoint_generel_samlet %>%
+  ggplot(., aes(x=estimate, y=reorder(level,desc(level))))+
+  geom_vline(xintercept=0.5, linetype="longdash")+
+  geom_errorbarh(aes(xmin=lower, xmax=upper),
+                 height=0.5)+
+  geom_point(fill="black")+
+  xlab("Sandsynlighed for præference for kandidat (marginal means)")+
+  ylab("")+
+  facet_grid(feature~.,
+             scales="free_y",space="free_y")
+plot_generel_samlet
+
+#gemmer plot
+ggsave(filename="plot_generel_samlet.png",
+       plot=plot_generel_samlet,
+       path="/Users/lineamarie/Desktop/Speciale data/Figurer",
+       width=8,
+       height=8,
+       dpi=320) #dots per inch/pixels per tomme (opløsning)
+
+
+####HYPOTESE 1 - (U)DEMOKRATISK ADFÆRD OG SANDSYNLIGHED FOR KANDIDATVALG######
+#Laver en marginal means model
+
+#Spredte demokrati-labels - marginal means
+mm_h1_spredte <- cj(data=df_clean,
+            formula=choice~kand_indvandring+kand_klima+kand_demokrati+kand_køn+kand_regering,
+            id=~participant_id, #klyngerobuste standardfejl
+            estimate="mm",
+            h0=0.5)
+
+#Plot
+plot_h1_spredte <- mm_h1_spredte %>%
+  filter(feature=="Syn på demokrati") %>%
+  ggplot(., aes(x=estimate, y=reorder(level, desc(level))))+
+  geom_vline(xintercept = 0.5, linetype = "longdash") +
+  geom_errorbarh(aes(xmin = lower, xmax = upper),
+                 height = 0.5) + 
+  geom_point(fill = "black") +
+  xlab("Sandsynlighed for præference for kandidat (marginal means)") +
+  ylab("") +
+  facet_grid(feature ~., 
+             scales = "free_y", space = "free_y") +
+  theme(legend.position = "bottom",
+        legend.title = element_blank(),
+        text = element_text(family = "Times"),
+        axis.title.x = element_text(size = 10))+ 
+  theme(
+    legend.position = "bottom",
+    legend.title = element_blank(),
+    axis.title.x = element_text(size = 10)
+  )
+
+plot_h1_spredte
+
+#gemmer
+ggsave(filename="plot_h1_spredte.png",
+       plot=plot_h1_spredte,
+       path="/Users/lineamarie/Desktop/Speciale data/Data forberedelse",
+       width=8,
+       height=4,
+       dpi=380)
+
+#Samlede demokrati-labels - marginal means
+mm_h1_samlet <- cj(data=df_clean,
+                    formula=choice~kand_indvandring+kand_klima+kand_demokrati_binær+kand_køn+kand_regering,
+                    id=~participant_id, #klyngerobuste standardfejl
+                    estimate="mm",
+                    h0=0.5)
+
+#Plot
+plot_h1_samlet <- mm_h1_samlet %>%
+  filter(feature=="Syn på demokrati") %>%
+  ggplot(., aes(x=estimate, y=reorder(level, desc(level))))+
+  geom_vline(xintercept = 0.5, linetype = "longdash") +
+  geom_errorbarh(aes(xmin = lower, xmax = upper),
+                 height = 0.5) + 
+  geom_point(fill = "black") +
+  xlab("Sandsynlighed for præference for kandidat (marginal means)") +
+  ylab("") +
+  facet_grid(feature ~., 
+             scales = "free_y", space = "free_y") +
+  theme(legend.position = "bottom",
+        legend.title = element_blank(),
+        text = element_text(family = "Times"),
+        axis.title.x = element_text(size = 10))+ 
+  theme(
+    legend.position = "bottom",
+    legend.title = element_blank(),
+    axis.title.x = element_text(size = 10)
+  )
+
+plot_h1_samlet
+
+#gemmer
+ggsave(filename="plot_h1_samlet.png",
+       plot=plot_h1_samlet,
+       path="/Users/lineamarie/Desktop/Speciale data/Data forberedelse",
+       width=8,
+       height=4,
+       dpi=380)
+
+#Samlede demokrati-labels - AMCE
+amce_h1_samlet <- cj(data=df_clean,
+                     formula=choice~kand_indvandring+kand_klima+kand_demokrati_binær+kand_køn+kand_regering,
+                     id=~participant_id, #klyngerobuste standardfejl
+                     estimate="amce")
+
+#AMCE-plot - samlede demokrati-labels
+# Plot af AMCE for samlede demokrati-labels
+plot_amce_h1_samlet <- amce_h1_samlet %>%
+  filter(feature == "Syn på demokrati") %>%
+  ggplot(aes(x = estimate, y = reorder(level, desc(level)))) +
+  geom_vline(xintercept = 0, linetype = "longdash") +  # nul-linje (ingen effekt ift. reference)
+  geom_errorbarh(aes(xmin = lower, xmax = upper),
+                 height = 0.5) +
+  geom_point(fill = "black") +
+  xlab("AMCE (ændring i sandsynlighed for præference)") +
+  ylab("") +
+  facet_grid(feature ~ ., 
+             scales = "free_y", space = "free_y") +
+  theme(
+    legend.position = "bottom",
+    legend.title = element_blank(),
+    text = element_text(family = "Times"),
+    axis.title.x = element_text(size = 10)
+  )+ 
+  theme(
+    legend.position = "bottom",
+    legend.title = element_blank(),
+    axis.title.x = element_text(size = 10)
+  )
+
+plot_amce_h1_samlet
+
+#gemmer
+ggsave(filename="plot_amce_h1_samlet.png",
+       plot=plot_amce_h1_samlet,
+       path="/Users/lineamarie/Desktop/Speciale data/Data forberedelse",
+       width=8,
+       height=4,
+       dpi=380)
+
+#Gemmer modeloutput
+tab_amce_h1_samlet <- amce_h1_samlet %>%
+  transmute(
+    feature, level,
+    estimate = round(estimate, 3),
+    `95% KI` = sprintf("[%.3f, %.3f]", lower, upper),
+    `p-værdi` = ifelse(p < 0.001, "<0.001", sprintf("%.3f", p))
+  )
+
+stargazer(tab_amce_h1_samlet,
+          type = "html",
+          summary = FALSE,
+          rownames = FALSE,
+          title = "Hypotese 1 (samlede labels): AMCE",
+          out = "amce_h1_samlet.html")
+
+
+#AMCE - spredte demokrati-labels
+amce_h1_spredte <- df_clean %>%
+  dplyr::mutate(
+    kand_demokrati_ref = stats::relevel(
+      kand_demokrati,
+      ref = "Regeringen bør altid følge domstole"
+    )
+  ) %>%
+  cj(
+    data = .,
+    formula = choice ~ kand_indvandring + kand_klima +
+      kand_demokrati_ref + kand_køn + kand_regering,
+    id = ~participant_id,
+    estimate = "amce"
+  )
+
+#Plot spredte - sætter først reference-kategori
+amce_h1_spredte_dem <- amce_h1_spredte %>%
+  dplyr::mutate(
+    feature = dplyr::if_else(
+      feature == "kand_demokrati_ref",
+      "Syn på demokrati",
+      feature
+    )
+  )
+
+#Laver plot
+plot_amce_h1_spredte <- amce_h1_spredte_dem %>%
+  filter(feature == "Syn på demokrati") %>%
+  ggplot(aes(x = estimate, y = reorder(level, desc(level)))) +
+  geom_vline(xintercept = 0, linetype = "longdash") +
+  geom_errorbarh(aes(xmin = lower, xmax = upper), height = 0.5) +
+  geom_point() +
+  xlab("AMCE (ændring i sandsynlighed for præference)") +
+  ylab("") +
+  facet_grid(feature ~ ., 
+             scales = "free_y", space = "free_y") +
+  theme(
+    legend.position = "bottom",
+    legend.title = element_blank(),
+    text = element_text(family = "Times"),
+    axis.title.x = element_text(size = 10)
+  )+ 
+  theme(
+    legend.position = "bottom",
+    legend.title = element_blank(),
+    axis.title.x = element_text(size = 10)
+  )
+
+plot_amce_h1_spredte
+
+#Gemmer modeloutput
+tab_amce_h1_spredte <- amce_h1_spredte_dem %>%
+  transmute(
+    feature, level,
+    estimate = round(estimate, 3),
+    `95% KI` = sprintf("[%.3f, %.3f]", lower, upper),
+    `p-værdi` = ifelse(p < 0.001, "<0.001", sprintf("%.3f", p))
+  )
+
+stargazer(tab_amce_h1_spredte,
+          type = "html",
+          summary = FALSE,
+          rownames = FALSE,
+          title = "Hypotese 1 (spredte labels): AMCE",
+          out = "amce_h1_spredte.html")
+
+#gemmer
+ggsave(filename="plot_amce_h1_spredte.png",
+       plot=plot_amce_h1_spredte,
+       path="/Users/lineamarie/Desktop/Speciale data/Data forberedelse",
+       width=8,
+       height=4,
+       dpi=380)
+
+###HYPOTESE 2 - POLITISK ENIGHED######
+
+#Politisk enighed - tjekker de binære variabler
+table(df_clean$enighed_indvandring) #Ser fin ud.
+table(df_clean$enighed_klimaafgifter) #Ser fin ud.
+table(df_clean$enighed_total_cat) #Ser fin ud. 
+
+#Marginal means-model for interaktion mellem (u)demokratisk adfærd og enighed om indvandring
+mm_enighed_indvandring <- cj(data=df_clean,
+                             formula= choice ~kand_indvandring+kand_klima+kand_demokrati_binær+kand_køn+kand_regering,
+                             by=~enighed_indvandring,
+                             id=~participant_id,
+                             estimate="mm",
+                             h0=0.5)
+
+
+#Tabel over resultater
+tab_mm_enighed_indvandring <- mm_enighed_indvandring %>%
+  filter(feature == "Syn på demokrati") %>%
+  mutate(
+    across(c(estimate, std.error, lower, upper), ~ round(.x, 3)),
+    p = ifelse(p < 0.001, "< 0.001", round(p, 3)),
+    KI = paste0("[", lower, "; ", upper, "]")
+  ) %>%
+  select(enighed_indvandring, level, estimate, std.error, KI, p)
+
+tab_mm_enighed_indvandring
+
+library(htmlTable)
+#gemmer tabellen som html
+html_code <- htmlTable(tab_mm_enighed_indvandring)
+
+write(html_code, file = "~/Desktop/Speciale data/tab_mm_enighed_indvandring_enighed.html")
+
+#Visualiser resultaterne
+plot_ind_enig_mm <- mm_enighed_indvandring %>%
+  filter(feature=="Syn på demokrati") %>%
+  ggplot(., aes(x = estimate, 
+                y = reorder(level, desc(level)),
+                shape = enighed_indvandring)) +
+  geom_point(position = position_dodge(width = 0.5),
+             size = 2) +
+  geom_errorbarh(aes(xmin = lower, 
+                     xmax = upper),
+                 position = position_dodge(width = 0.5),
+                 height = 0.5) +
+  geom_vline(xintercept = 0.5,
+             linetype = "longdash",
+             color = "black") +
+  xlab("Sansynlighed for præference for kandidat (marginal means)") +
+  ylab("") +
+  labs(title = "Indvandring") +
+  facet_grid(feature ~ .,
+             scales = "free_y",
+             space = "free_y") +
+  xlim(0.2, 0.9) +
+  theme(legend.position = "bottom",
+        legend.title = element_blank(),
+        text = element_text(family = "Times"),
+        plot.title = element_text(size = 10, face = "bold"),
+        axis.title.x = element_text(size = 10)) +
+  guides(shape = guide_legend(nrow = 1,
+                              byrow = TRUE)) +
+  scale_shape_manual(
+    values = c("Uenig (indvandring)" = 17,
+               "Enig (indvandring)"  = 16),
+    labels = c("Uenig (indvandring)" = "Uenige om indvandring",
+               "Enig (indvandring)"  = "Enige om indvandring")
+  )+ 
+  theme(
+    legend.position = "bottom",
+    legend.title = element_blank(),
+    axis.title.x = element_text(size = 10)
+  )
+
+plot_ind_enig_mm  
+
+#gemmer
+ggsave(filename="plot_ind_enig_mm.png",
+       plot=plot_ind_enig_mm,
+       path="/Users/lineamarie/Desktop/Speciale data/Data forberedelse",
+       width=8,
+       height=4,
+       dpi=380)
+  
+#Marginal means-model for interaktion mellem (u)demokratisk adfærd og enighed om klimaafgifter
+mm_enighed_klima <- cj(data=df_clean,
+                             formula= choice ~kand_indvandring+kand_klima+kand_demokrati_binær+kand_køn+kand_regering,
+                             by=~enighed_klimaafgifter,
+                             id=~participant_id,
+                             estimate="mm",
+                             h0=0.5)
+
+#Tabel over resultater
+tab_mm_enighed_klima <- mm_enighed_klima %>%
+  filter(feature == "Syn på demokrati") %>%
+  mutate(
+    across(c(estimate, std.error, lower, upper), ~ round(.x, 3)),
+    p = ifelse(p < 0.001, "< 0.001", round(p, 3)),
+    KI = paste0("[", lower, "; ", upper, "]")
+  ) %>%
+  select(enighed_klimaafgifter, level, estimate, std.error, KI, p)
+
+tab_mm_enighed_klima
+
+#gemmer tabellen som html
+html_code <- htmlTable(tab_mm_enighed_klima)
+
+write(html_code, file = "~/Desktop/Speciale data/tab_mm_enighed_klima.html")
+
+#Visualiser resultaterne
+plot_klima_enig_mm <- mm_enighed_klima %>%
+  filter(feature=="Syn på demokrati") %>%
+  ggplot(., aes(x = estimate, 
+                y = reorder(level, desc(level)),
+                shape = enighed_klimaafgifter)) +
+  geom_point(position = position_dodge(width = 0.5),
+             size = 2) +
+  geom_errorbarh(aes(xmin = lower, 
+                     xmax = upper),
+                 position = position_dodge(width = 0.5),
+                 height = 0.5) +
+  geom_vline(xintercept = 0.5,
+             linetype = "longdash",
+             color = "black") +
+  xlab("Sansynlighed for præference for kandidat (marginal means)") +
+  ylab("") +
+  labs(title = "Klimaafgifter") +
+  facet_grid(feature ~ .,
+             scales = "free_y",
+             space = "free_y") +
+  xlim(0.2, 0.9) +
+  theme(legend.position = "bottom",
+        legend.title = element_blank(),
+        text = element_text(family = "Times"),
+        plot.title = element_text(size = 10, face = "bold"),
+        axis.title.x = element_text(size = 10)) +
+  guides(shape = guide_legend(nrow = 1,
+                              byrow = TRUE)) +
+  scale_shape_manual(
+    values = c(17, 16),  #16 = cirkel, 17 = trekant
+    labels = c("Uenige om klimaafgifter", "Enige om klimaafgifter")
+  )+ 
+  theme(
+    legend.position = "bottom",
+    legend.title = element_blank(),
+    axis.title.x = element_text(size = 10)
+  )
+
+plot_klima_enig_mm
+
+#gemmer
+ggsave(filename="plot_klima_enig_mm.png",
+       plot=plot_klima_enig_mm,
+       path="/Users/lineamarie/Desktop/Speciale data/Data forberedelse",
+       width=8,
+       height=4,
+       dpi=380)
+
+#Marginal means-model for interaktion mellem (u)demokratisk adfærd og enighed generelt
+mm_enighed_total <- cj(data=df_clean,
+                       formula= choice ~kand_indvandring+kand_klima+kand_demokrati_binær+kand_køn+kand_regering,
+                       by=~enighed_total_cat,
+                       id=~participant_id,
+                       estimate="mm",
+                       h0=0.5)
+
+#Tabel over resultater
+tab_mm_enighed_total <- mm_enighed_total %>%
+  filter(feature == "Syn på demokrati") %>%
+  mutate(
+    across(c(estimate, std.error, lower, upper), ~ round(.x, 3)),
+    p = ifelse(p < 0.001, "< 0.001", round(p, 3)),
+    KI = paste0("[", lower, "; ", upper, "]")
+  ) %>%
+  select(enighed_total_cat, level, estimate, std.error, KI, p)
+
+tab_mm_enighed_total
+
+#gemmer tabellen som html
+html_code <- htmlTable(tab_mm_enighed_total)
+
+write(html_code, file = "~/Desktop/Speciale data/tab_mm_enighed_total.html")
+
+
+#Visualiser resultaterne
+plot_enig_total_mm <- mm_enighed_total %>%
+  filter(feature=="Syn på demokrati") %>%
+  ggplot(., aes(x = estimate, 
+                y = reorder(level, desc(level)),
+                shape = enighed_total_cat)) +
+  geom_point(position = position_dodge(width = 0.5),
+             size = 2) +
+  geom_errorbarh(aes(xmin = lower, 
+                     xmax = upper),
+                 position = position_dodge(width = 0.5),
+                 height = 0.5) +
+  geom_vline(xintercept = 0.5,
+             linetype = "longdash",
+             color = "black") +
+  xlab("Sansynlighed for præference for kandidat (marginal means)") +
+  ylab("") +
+  labs(title = "Enighed generelt") +
+  facet_grid(feature ~ .,
+             scales = "free_y",
+             space = "free_y") +
+  coord_cartesian(xlim=c(0.2,0.9))+
+  theme(legend.position = "bottom",
+        legend.title = element_blank(),
+        text = element_text(family = "Times"),
+        plot.title = element_text(size = 10, face = "bold"),
+        axis.title.x = element_text(size = 10)) +
+  guides(shape = guide_legend(nrow = 1,
+                              byrow = TRUE)) +
+  scale_shape_manual(
+    values = c("Uenige på begge"=16, #cirkel
+               "Enige på ét" =17, #trekant
+               "Enige på begge"=15), # firkant
+    labels = c("Uenige på begge", "Enige på ét", "Enige på begge")
+  )+ 
+  theme(
+    legend.position = "bottom",
+    legend.title = element_blank(),
+    axis.title.x = element_text(size = 10)
+  )
+
+plot_enig_total_mm
+
+#gemmer
+ggsave(filename="plot_enig_total_mm.png",
+       plot=plot_enig_total_mm,
+       path="/Users/lineamarie/Desktop/Speciale data/Data forberedelse",
+       width=8,
+       height=4,
+       dpi=380)
+
+#AMCE-model: Interaktion mellem (u)demokratisk adfærd og enighed om indvandring
+amce_ind_enig <- cj(data=df_clean,
+                    formula=choice~kand_demokrati_binær,
+                    by=~enighed_indvandring,
+                    id=~participant_id)
+
+#Output-tabel
+tab_amce_ind_enig <- amce_ind_enig %>%
+  filter(feature == "Syn på demokrati",
+         level %in% c("Demokratisk", "Udemokratisk")) %>%
+  mutate(
+    across(c(estimate, std.error, lower, upper),
+           ~ round(.x, 3)),
+    KI = if_else(!is.na(lower),
+                 paste0("[", lower, "; ", upper, "]"),
+                 NA_character_),
+    p = ifelse(
+      is.na(p), NA_character_,
+      ifelse(p < 0.001, "< 0.001", sprintf("%.3f", p))
+    )
+  ) %>%
+  select(enighed_indvandring, level, estimate, std.error, KI, p)
+
+tab_amce_ind_enig
+#gemmer tabellen som html
+html_code <- htmlTable(tab_amce_ind_enig)
+
+write(html_code, file = "~/Desktop/Speciale data/tab_amce_ind_enig.html")
+
+#Visualiser resultater
+plot_enig_ind_amce <- amce_ind_enig %>%
+  filter(feature=="Syn på demokrati") %>%
+  ggplot(.,aes(x=estimate,
+               y=reorder(level,desc(level)),
+               shape=enighed_indvandring))+
+  geom_point(position=position_dodge(width=0.5),
+             size=2)+
+  geom_errorbarh(aes(xmin=lower,
+                     xmax=upper),
+                 position=position_dodge(width=0.5),
+                 height=0.5)+
+  geom_vline(xintercept=0,
+             linetype="longdash",
+             color="black")+
+  coord_cartesian(xlim=c(-0.5,0.1))+
+  xlab("Sandsynlighed for præference for kandidat (AMCE)")+
+  ylab("")+
+  labs(title="Indvandring")+
+  facet_grid(feature~.,
+             scales="free_y",
+             space="free_y")+
+  theme(legend.position = "bottom",
+        legend.title = element_blank(),
+        text = element_text(family = "Times"),
+        plot.title = element_text(size = 10, face = "bold"),
+        axis.title.x = element_text(size = 10)) +
+  guides(shape = guide_legend(nrow = 1,
+                              byrow = TRUE)) +
+  scale_shape_discrete(breaks = c("Enig (indvandring)",
+                                  "Uenig (indvandring)"))+ 
+  theme(
+    legend.position = "bottom",
+    legend.title = element_blank(),
+    axis.title.x = element_text(size = 10)
+  )
+
+plot_enig_ind_amce
+
+#gemmer
+ggsave(filename="plot_enig_ind_amce.png",
+       plot=plot_enig_ind_amce,
+       path="/Users/lineamarie/Desktop/Speciale data/Data forberedelse",
+       width=8,
+       height=4,
+       dpi=380)
+
+#AMCE-model: Interaktion mellem (u)demokratisk adfærd og enighed om klimaafgifter
+amce_klima_enig <- cj(data=df_clean,
+                    formula=choice~kand_demokrati_binær,
+                    by=~enighed_klimaafgifter,
+                    id=~participant_id)
+
+#Output-tabel
+tab_amce_klima_enig <- amce_klima_enig %>%
+  filter(feature == "Syn på demokrati",
+         level %in% c("Demokratisk", "Udemokratisk")) %>%
+  mutate(
+    across(c(estimate, std.error, lower, upper),
+           ~ round(.x, 3)),
+    KI = if_else(!is.na(lower),
+                 paste0("[", lower, "; ", upper, "]"),
+                 NA_character_),
+    p = ifelse(
+      is.na(p), NA_character_,
+      ifelse(p < 0.001, "< 0.001", sprintf("%.3f", p))
+    )
+  ) %>%
+  select(enighed_klimaafgifter, level, estimate, std.error, KI, p)
+
+tab_amce_klima_enig
+#gemmer tabellen som html
+html_code <- htmlTable(tab_amce_klima_enig)
+
+write(html_code, file = "~/Desktop/Speciale data/tab_amce_klima_enig.html")
+
+#Visualiser resultater
+plot_enig_klima_amce <- amce_klima_enig %>%
+  filter(feature=="Syn på demokrati") %>%
+  ggplot(.,aes(x=estimate,
+               y=reorder(level,desc(level)),
+               shape=enighed_klimaafgifter))+
+  geom_point(position=position_dodge(width=0.5),
+             size=2)+
+  geom_errorbarh(aes(xmin=lower,
+                     xmax=upper),
+                 position=position_dodge(width=0.5),
+                 height=0.5)+
+  geom_vline(xintercept=0,
+             linetype="longdash",
+             color="black")+
+  coord_cartesian(xlim=c(-0.5,0.1))+
+  xlab("Sandsynlighed for præference for kandidat (AMCE)")+
+  ylab("")+
+  labs(title="Klimaafgifter")+
+  facet_grid(feature~.,
+             scales="free_y",
+             space="free_y")+
+  theme(legend.position = "bottom",
+        legend.title = element_blank(),
+        text = element_text(family = "Times"),
+        plot.title = element_text(size = 10, face = "bold"),
+        axis.title.x = element_text(size = 10)) +
+  guides(shape = guide_legend(nrow = 1,
+                              byrow = TRUE)) +
+  scale_shape_discrete(breaks = c("Enig (klima)",
+                                  "Uenig (klima)"))+ 
+  theme( legend.position = "bottom",
+         legend.title = element_blank(),
+         axis.title.x = element_text(size = 10)
+  )
+
+plot_enig_klima_amce
+
+#gemmer
+ggsave(filename="plot_enig_klima_amce.png",
+       plot=plot_enig_klima_amce,
+       path="/Users/lineamarie/Desktop/Speciale data/Data forberedelse",
+       width=8,
+       height=4,
+       dpi=380)
+
+#AMCE-model: Interaktion mellem (u)demokratisk adfærd og enighed om indvandring
+amce_ind_enig <- cj(data=df_clean,
+                    formula=choice~kand_demokrati_binær,
+                    by=~enighed_indvandring,
+                    id=~participant_id)
+#Visualiser resultater
+plot_enig_ind_amce <- amce_ind_enig %>%
+  filter(feature=="Syn på demokrati") %>%
+  ggplot(.,aes(x=estimate,
+               y=reorder(level,desc(level)),
+               shape=enighed_indvandring))+
+  geom_point(position=position_dodge(width=0.5),
+             size=2)+
+  geom_errorbarh(aes(xmin=lower,
+                     xmax=upper),
+                 position=position_dodge(width=0.5),
+                 height=0.5)+
+  geom_vline(xintercept=0,
+             linetype="longdash",
+             color="black")+
+  coord_cartesian(xlim=c(-0.5,0.1))+
+  xlab("Sandsynlighed for kandidatvalg (AMCE)")+
+  ylab("")+
+  labs(title="Indvandring")+
+  facet_grid(feature~.,
+             scales="free_y",
+             space="free_y")+
+  theme(legend.position = "bottom",
+        legend.title = element_blank(),
+        text = element_text(family = "Times"),
+        plot.title = element_text(size = 10, face = "bold"),
+        axis.title.x = element_text(size = 10)) +
+  guides(shape = guide_legend(nrow = 1,
+                              byrow = TRUE)) +
+  scale_shape_discrete(breaks = c("Enig (indvandring)",
+                                  "Uenig (indvandring)"))+ 
+  theme(
+    panel.background = element_rect(fill = "white", colour = NA),
+    panel.grid.major = element_line(colour = "grey90"),
+    panel.grid.minor = element_line(colour = "grey90")
+  )
+
+plot_enig_ind_amce
+
+#gemmer
+ggsave(filename="plot_enig_ind_amce.png",
+       plot=plot_enig_ind_amce,
+       path="/Users/lineamarie/Desktop/Speciale data/Data forberedelse",
+       width=10,
+       height=6,
+       dpi=380)
+
+
+#AMCE-model: Interaktion mellem (u)demokratisk adfærd og generel enighed
+amce_total_enig <- cj(data=df_clean,
+                      formula=choice~kand_demokrati_binær,
+                      by=~enighed_total_cat,
+                      id=~participant_id)
+
+#Output-tabel
+tab_amce_total_enig <- amce_total_enig %>%
+  filter(feature == "Syn på demokrati",
+         level %in% c("Demokratisk", "Udemokratisk")) %>%
+  mutate(
+    across(c(estimate, std.error, lower, upper),
+           ~ round(.x, 3)),
+    KI = if_else(!is.na(lower),
+                 paste0("[", lower, "; ", upper, "]"),
+                 NA_character_),
+    p = ifelse(
+      is.na(p), NA_character_,
+      ifelse(p < 0.001, "< 0.001", sprintf("%.3f", p))
+    )
+  ) %>%
+  select(enighed_total_cat, level, estimate, std.error, KI, p)
+
+tab_amce_total_enig
+#gemmer tabellen som html
+html_code <- htmlTable(tab_amce_total_enig)
+
+write(html_code, file = "~/Desktop/Speciale data/tab_amce_total_enig.html")
+
+#Visualiser resultater
+plot_enig_total_amce <- amce_total_enig %>%
+  filter(feature=="Syn på demokrati") %>%
+  ggplot(.,aes(x=estimate,
+               y=reorder(level,desc(level)),
+               shape=enighed_total_cat))+
+  geom_point(position=position_dodge(width=0.5),
+             size=2)+
+  geom_errorbarh(aes(xmin=lower,
+                     xmax=upper),
+                 position=position_dodge(width=0.5),
+                 height=0.5)+
+  geom_vline(xintercept=0,
+             linetype="longdash",
+             color="black")+
+  coord_cartesian(xlim=c(-0.5,0.1))+
+  xlab("Sandsynlighed for præference for kandidat (AMCE)")+
+  ylab("")+
+  labs(title="Enighed generelt")+
+  facet_grid(feature~.,
+             scales="free_y",
+             space="free_y")+
+  theme(legend.position = "bottom",
+        legend.title = element_blank(),
+        text = element_text(family = "Times"),
+        plot.title = element_text(size = 10, face = "bold"),
+        axis.title.x = element_text(size = 10)) +
+  guides(shape = guide_legend(nrow = 1,
+                              byrow = TRUE)) +
+  scale_shape_discrete(breaks = c("Uenige på begge",
+                                  "Enige på ét",
+                                  "Enige på begge"))+ 
+  theme(
+    legend.position = "bottom",
+    legend.title = element_blank(),
+    axis.title.x = element_text(size = 10)
+  )
+
+plot_enig_total_amce
+
+#gemmer
+ggsave(filename="plot_enig_total_amce.png",
+       plot=plot_enig_total_amce,
+       path="/Users/lineamarie/Desktop/Speciale data/Data forberedelse",
+       width=8,
+       height=4,
+       dpi=380)
+
+
+###HYPOTESE 3: POLITISK TILLID####
+
+#Tjekker variablerne
+summary(df_clean$tillids_indeks_additiv_skaleret) #Spænder fra 0 til 1
+table(df_clean$kand_demokrati_binær, useNA="ifany")
+
+library(fixest)
+library(emmeans)
+
+#Der blev tidligere lavet en pair_id variabel (pair_id 1, 2 etc - den benyttes til fixed effects)
+head(df_clean$pair_id)
+
+#MARGINAL MEANS PÅ TILLIDS-SUBGRUPPER
+
+#Konstruerer en tredelt tillids-variabel med intervaller i tre lige store dele af tillidsindeksets spænd
+min_val <- min(df_clean$tillids_indeks_additiv_skaleret, na.rm = TRUE)
+max_val <- max(df_clean$tillids_indeks_additiv_skaleret, na.rm = TRUE)
+
+breaks_equal <- seq(from = min_val, to = max_val, length.out = 4) #for at få tre dele skal der være 4 grænseværdier
+
+df_clean$tillid_tertil_value <- cut(
+  df_clean$tillids_indeks_additiv_skaleret,
+  breaks = breaks_equal,
+  include.lowest = TRUE,
+  labels = c("Lav tillid (værdi)", "Mellem tillid (værdi)", "Høj tillid (værdi)")
+)
+
+breaks_equal   #ser intervallerne
+table(df_clean$tillid_tertil_value)  #ser fordelingen. fornuftig
+
+#moderationsmodel med pair_id-fixed effects og klyngerobuste standardfejl på respondentniveau
+model_2 <- feols(choice ~ kand_demokrati_binær*tillid_tertil_value | pair_id, cluster=~participant_id, data=df_clean) #kan bare ignorere collinearity
+#Det tester direkte, om den negative effekt af udemokratisk adfærd er svagere blandt personer med høj tillid
+summary(model_2)
+#Indledende wald-test
+wald(model_2, "kand_demokrati_binærUdemokratisk:tillid_tertil_value") #(p=.007557). Straf-effekten varierer systematisk med tillidsniveauet.
+
+#Tabeloutput
+tab_model_2<- tidy(model_2, conf.int = TRUE) %>%
+  mutate(
+    estimate = round(estimate, 3),
+    std.error = round(std.error, 3),
+    conf.low  = round(conf.low, 3),
+    conf.high = round(conf.high, 3),
+    p = ifelse(p.value < 0.001, "< 0.001", round(p.value, 3)),
+    KI = paste0("[", conf.low, "; ", conf.high, "]")
+  ) %>%
+  select(term, estimate, std.error, KI, p)
+
+tab_model_2
+
+#Gemmer som html
+html_code <- kable(tab_model_2, format = "html")
+
+write(
+  html_code,
+  file = "~/Desktop/Speciale data/tab_model_2_tillid.html"
+)
+
+#Subgruppe-specifikke marginal means - deskriptive præferenceforskelle
+#emmeans() laver herefter marginal means for hvert niveau af tillid - som Leeper et al. (2020) anbefaler
+result_tertil <- emmeans(model_2, ~ kand_demokrati_binær | tillid_tertil_value)
+
+#Straffe-effekten (Demokratisk-Udemokratisk)
+contrast(result_tertil, by = "tillid_tertil_value")
+
+#Kontraster (differences in MMs)
+#Forskellen mellem dem. og udem. indenfor hvert tillidsniveau - straffe-niveauet (AMCE'er):
+contrast(result_tertil, interaction = "pairwise")
+
+#OMNIBUS F-TEST: Er forskellen mellem disse tre straffe signifikant (Leeper et al. 2020: 20-21).
+#Nested model comparison mellem en model u/ interaktioner og en model m/ interaktioner.
+#Formelt en F-test af nulhypotesen at alle interaktionstermer er 0. 
+
+#Restricted model: ingen interaktion (ingen forskel mellem tillidsgrupper)
+model_restricted <- feols(choice ~ kand_demokrati_binær | pair_id,
+                          cluster = ~participant_id,
+                          data = df_clean)
+
+#Unrestricted model: tillader forskelle mellem tillidsgrupper (interaktioner)
+model_unrestricted <- feols(choice ~ kand_demokrati_binær * tillid_tertil_value | pair_id,
+                            cluster = ~participant_id,
+                            data = df_clean)
+
+#Omnibus F-test (nested model comparison)
+wald(model_unrestricted, fe.restricted = model_restricted)
+#p<0.001
+#En signifikant F (p<0.5) betyder, at tillidsniveau systematisk ændrer vælgernes præferencer.
+#Altså kan jeg afvise nulhypotesen, og der er signifikante forskelle i præferencer mellem tillidsgrupperne.
+#Omnibus F-testen afviser lighed mellem subgrupperne
+
+summary(result_tertil)
+#Folk med høj tillid vælger udemokratiske kandidater med 14% sandsynlighed
+#Folk med mellem tillid vælger udemokratiske kandidater med 29,1% sandsynglighed
+#Folk med lav tillid vælger udemokratiske kandidater med 29,3% sandsynlighed
+#Det er i kontrast til H3 - her ser vi at høj tillids-personer straffer udemokratisk adfærd mere
+#emmean (estimeret mm) er identisk for begge tillidsgrupper på Demokratisk. 
+#Det skyldes fixed effects for pair_id i modellen.  Baseline (demokratisk) er ens på tværs af grupper i modellen, fordi interaktionen reelt kun påvirker forskellen mellem demokratisk og udemokratisk, ikke niveauet.
+#Politisk tillid forstærker snarere end svækker effekten af udemokratisk adfærd.
+
+#Plots
+plot(result_tertil, comparison = TRUE)
+emmip(result_tertil, tillid_tertil_value ~ kand_demokrati_binær, CIs = TRUE)
+
+#ggplot
+plotdata <- as.data.frame(summary(result_tertil))
+plotdata
+
+plot_h3_tertil <- ggplot(
+  plotdata,
+  aes(
+    x= tillid_tertil_value,
+    y = emmean,
+    group = kand_demokrati_binær)) +
+  geom_ribbon(
+    aes(
+      ymin  = lower.CL,
+      ymax  = upper.CL,
+      fill  = kand_demokrati_binær),
+    alpha  = 0.25,
+    colour = NA) +
+  geom_line(
+    aes(linetype = kand_demokrati_binær),
+    linewidth = 0.9,
+    colour    = "black") +
+  geom_point(
+    aes(shape = kand_demokrati_binær),
+    size= 3,
+    colour = "black",
+    fill = "white") +
+  scale_fill_manual(
+    name = "Kandidatens adfærd",
+    values = c("Demokratisk" = "grey80", "Udemokratisk" = "grey60")) +
+  scale_linetype_manual(
+    name = "Kandidatens adfærd",
+    values = c("Demokratisk" = "solid", "Udemokratisk" = "dashed")) +
+  scale_shape_manual(
+    name = "Kandidatens adfærd",
+    values = c("Demokratisk" = 16, "Udemokratisk" = 16)) +
+  scale_y_continuous(
+    labels = scales::percent_format(accuracy = 1),
+    expand = expansion(mult = c(0.05, 0.08))) +
+  labs(x= "Niveau af politisk tillid (tredelt)",
+       y= "Sandsynlighed for kandidatpræference",
+       title = "Kandidatpræferencer på tværs af politisk tillid") +
+  theme_classic(base_size = 13, base_family = "Times") +
+  theme(legend.position= "top",
+        legend.key.width=unit(2,"cm"),
+        plot.title=element_text(hjust = 0.5, face = "bold"),
+    panel.border=element_blank(),
+    axis.title.x=element_text(margin = margin(t = 6)),
+    axis.title.y=element_text(margin = margin(r = 6)),
+    panel.grid.major=element_blank(),
+    panel.grid.minor=element_blank()
+  )
+
+#gemmer
+ggsave(filename="plot_h3_tertil.png",
+       plot=plot_h3_tertil,
+       path="/Users/lineamarie/Desktop/Speciale data/Data forberedelse",
+       width=8,
+       height=5,
+       dpi=380)
+
+#Er interaktionen mellem kandidatadfærd og tillid signifkant? 
+#Altså, er forskellen mellem Dem og Udem signifikant forskellig mellem tillidsgrupper?
+
+#Sammenligning: Beregner igen kontraster(forskelle) mellem Dem og Udem inden for hver tillidsgruppe (AMCE'er)
+contrasts_tertil <- contrast(result_tertil, interaction = "pairwise")
+df_effekt <- as.data.frame(summary(contrasts_tertil, infer = c(TRUE, TRUE))) #tilføjer konfidensintervaller
+
+#Sammenligner de tre forskelle mellem Dem og Udem på tværs af tillidsniveauer. 
+#Altså forskelle-mellem-forskelle
+
+#SIMPLE PARVISE FORSKELLE MELLEM AMCE'ERNE
+# Forskelle-mellem-forskelle (AMCE'er)
+mellem_tillid <- contrast(result_tertil, by = NULL, interaction = "pairwise")
+summary(mellem_tillid, infer = c(TRUE, TRUE))
+
+#laver data frame 
+kontrast_tillid <- as.data.frame(
+  summary(mellem_tillid, infer = c(TRUE, TRUE))
+) %>%
+  transmute(
+    `Sammenligning` = dplyr::case_when(
+      tillid_tertil_value_pairwise == "Lav tillid - Mellem tillid"  ~ "Lav vs. mellem tillid",
+      tillid_tertil_value_pairwise == "Lav tillid - Høj tillid"     ~ "Lav vs. høj tillid",
+      tillid_tertil_value_pairwise == "Mellem tillid - Høj tillid"  ~ "Mellem vs. høj tillid",
+      TRUE ~ tillid_tertil_value_pairwise
+    ),
+    `Forskel i straffe-effekt (procentpoint)` = estimate * 100,
+    `Nedre 95% CI`  = lower.CL * 100,
+    `Øvre 95% CI`   = upper.CL * 100,
+    `p-værdi`       = ifelse(p.value < 0.001, "<0.001",
+                             format(round(p.value, 3), nsmall = 3))
+  )
+
+
+stargazer(
+  kontrast_tillid,
+  type = "html",
+  summary = FALSE,
+  rownames = FALSE,
+  digits = 2,
+  title = "Parvise forskelle i straffe-effekt af udemokratisk adfærd mellem tillidsgrupper",
+  out = "tabel_kontrast_tillid.html"
+)
+
+#Vender fortegn korrekt (bruger midlertidige variabler til CI)
+tmp_lower <- df_effekt$lower.CL
+tmp_upper <- df_effekt$upper.CL
+
+#får CI'er med og vender fortegn, så negative værdier = stærkere straf (−Δ sandsynlighed)
+df_effekt$estimate <- -df_effekt$estimate
+df_effekt$lower.CL <- -tmp_upper
+df_effekt$upper.CL <- -tmp_lower
+
+#pæn rækkefølge på faktorniveauer
+
+df_effekt$tillid_tertil_value <- factor(
+  c("Lav tillid", "Mellem tillid", "Høj tillid"),
+  levels = c("Lav tillid", "Mellem tillid", "Høj tillid")
+)
+
+
+#Plot: straf (negativ effekt af udemokratisk adfærd)
+straf_tillid <- ggplot(df_effekt, aes(x = tillid_tertil_value, y = estimate)) +
+  geom_point(size = 3, color = "black") +
+  geom_errorbar(
+    aes(ymin = lower.CL, ymax = upper.CL),
+    width = 0.1,
+    color = "black"
+  ) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black", alpha = 0.5) +
+  scale_y_continuous(labels = scales::label_percent(accuracy = 1)) +
+  labs(
+    x = NULL,
+    y = "Straffe-effekt af udemokratisk adfærd \n(−Δ sandsynlighed for støtte)",
+    caption = "Estimeret forskel (demokratisk − udemokratisk). Mere negativt = stærkere straf for udemokratisk adfærd"
+  ) +
+  theme_minimal(base_family = "Times") +
+  theme(
+    axis.line.x = element_line(color = "black", linewidth = 0.6),
+    axis.line.y = element_line(color = "black", linewidth = 0.6),
+    axis.text.x  = element_text(size = 14),
+    axis.text.y  = element_text(size = 12),
+    axis.title.y = element_text(size = 14),
+    plot.caption=element_text(size=10),
+    panel.grid.minor = element_blank(),
+    panel.grid.major.x = element_blank(),
+    plot.title = element_blank()
+  )
+
+#gemmer plot
+ggsave(filename="straf_tillid.png",
+       plot=straf_tillid,
+       path="/Users/lineamarie/Desktop/Speciale data/Figurer",
+       width=7,
+       height=5,
+       dpi=320) #dots per inch/pixels per tomme (opløsning)
+
+
+#Laver stargazer-tabel med straffe-effekterne (AMCE'er)
+#AMCE-tabel (straffe-effekter inden for tillidsgrupper)
+amce_tabel <- df_effekt %>%
+  transmute(
+    `Tillidsniveau` = tillid_tertil_value,
+    `Straffe-effekt (procentpoint)` = estimate * 100,
+    `Nedre 95% CI` = lower.CL * 100,
+    `Øvre 95% CI` = upper.CL * 100,
+    `p_værdi` = p.value
+  )
+
+#Fikser p-værdi-output
+amce_tabel$p_værdi <- ifelse(amce_tabel$p_værdi < 0.001, "<0.001",
+                             round(amce_tabel$p_værdi, 3))
+
+stargazer(
+  amce_tabel,
+  type = "html",           
+  summary = FALSE,
+  rownames = FALSE,
+  digits = 2,
+  title = "AMCE'er: Straffe-effekt af udemokratisk adfærd inden for tillidsgrupper",
+  out = "tabel_amce_tillid.html"
+)
+
+
+###HYPOTESE 4 - REGERINGSERFARING####
+table(df_clean$kand_regering)
+
+#tre-vejs-interaktion (mindre power)
+
+#Kører en model for H4
+model_3 <- feols(
+  choice ~kand_demokrati_binær*tillid_tertil_value*kand_regering| pair_id,
+  cluster = ~participant_id,
+  data = df_clean
+)
+#De øvrige attributter behøves ikke inkluderes for at teste H4. Effekterne er stadig unbiased pga. randomisering og pair-fixed effects. 
+
+summary(model_3)
+
+#Gemmer output
+library(modelsummary)
+
+modelsummary(
+  list("Model 3" = model_3),          
+  output   = "model_3_output.docx",
+  estimate = "{estimate}{stars}",     
+  statistic = c(
+    "Std. Error" = "std.error",  
+    "p-værdi"    = "p.value"   
+  ),
+  shape = term ~ model + statistic, 
+  stars = TRUE,
+  title = "Model 3: Effekt af (u)demokratisk adfærd, tillid og regeringserfaring",
+  coef_map = c(
+    "kand_demokrati_binærUdemokratisk" = "Udemokratisk adfærd",
+    "kand_regeringHar tidligere siddet i regering" = "Regeringserfaring",
+    "kand_demokrati_binærUdemokratisk:tillid_tertil_valueMellem tillid (værdi)" = 
+      "Udemokratisk adfærd × Mellem tillid",
+    "kand_demokrati_binærUdemokratisk:tillid_tertil_valueHøj tillid (værdi)" = 
+      "Udemokratisk adfærd × Høj tillid",
+    "kand_demokrati_binærUdemokratisk:kand_regeringHar tidligere siddet i regering" = 
+      "Udemokratisk adfærd × Regeringserfaring",
+    "tillid_tertil_valueMellem tillid (værdi):kand_regeringHar tidligere siddet i regering" = 
+      "Mellem tillid × Regeringserfaring",
+    "tillid_tertil_valueHøj tillid (værdi):kand_regeringHar tidligere siddet i regering" = 
+      "Høj tillid × Regeringserfaring",
+    "kand_demokrati_binærUdemokratisk:tillid_tertil_valueMellem tillid (værdi):kand_regeringHar tidligere siddet i regering" = 
+      "Udemokratisk adfærd × Mellem tillid × Regeringserfaring",
+    "kand_demokrati_binærUdemokratisk:tillid_tertil_valueHøj tillid (værdi):kand_regeringHar tidligere siddet i regering" = 
+      "Udemokratisk adfærd × Høj tillid × Regeringserfaring"
+  ),
+  gof_omit = "R2$|R2 Adj|RMSE|Std.Errors"
+)
+
+#Marginal means udregnes til at udlede forventet valgsandsynlighed for hver kombination
+library(emmeans)
+emm_h4 <- emmeans(
+  model_3,
+  ~ kand_demokrati_binær | tillid_tertil_value * kand_regering
+)
+summary(emm_h4)
+
+#Gør klar til plot
+
+#Beregner forskelle (Demokratisk − Udemokratisk) - differences in MMs
+diffs_h4 <- contrast(
+  emm_h4,
+  method = "revpairwise",
+  by = c("tillid_tertil_value", "kand_regering")
+)
+
+#Henter p-værdier (summary) og konfidensintervaller (CI) (confint)
+df_p  <- as.data.frame(summary(diffs_h4))   #p værdi
+df_ci <- as.data.frame(confint(diffs_h4))   #lower.CL / upper.CL
+
+#Samler på de fælles id-kolonner
+library(dplyr)
+diffs_df <- df_p %>%
+  select(contrast, tillid_tertil_value, kand_regering, estimate, SE, df, p.value) %>%
+  left_join(
+    df_ci %>% select(contrast, tillid_tertil_value, kand_regering, lower.CL, upper.CL),
+    by = c("contrast","tillid_tertil_value","kand_regering")
+  )
+
+#Vender fortegn, så negativt betyder stærkere straf
+diffs_df <- diffs_df %>%
+  mutate(
+    estimate = -estimate,
+    tmp_lower = lower.CL,
+    tmp_upper = upper.CL,
+    lower.CL = -tmp_upper,
+    upper.CL = -tmp_lower
+  )
+
+#Laver tabel
+tabel_h4 <- diffs_df %>%
+  select(tillid_tertil_value, kand_regering, estimate, lower.CL, upper.CL, p.value) %>%
+  mutate(
+    estimate = round(estimate, 3),
+    lower.CL = round(lower.CL, 3),
+    upper.CL = round(upper.CL, 3),
+    p.value  = scales::pvalue(p.value)
+  ) %>%
+  rename(
+    `Tillid` = tillid_tertil_value,
+    `Regeringserfaring` = kand_regering,
+    `Straf (Δ)` = estimate,
+    `95% CI (nedre)` = lower.CL,
+    `95% CI (øvre)`  = upper.CL,
+    `p-værdi` = p.value
+  )
+
+tabel_h4
+
+#gemmer tabel
+html_code <- kable(tabel_h4, format = "html")
+
+write(
+  html_code,
+  file = "~/Desktop/Speciale data/tabel_h4.html"
+)
+
+#Plot
+h4_effekt_plot <- ggplot(
+  diffs_df,
+  aes(
+    x= tillid_tertil_value,y = estimate,
+    color = kand_regering, fill=kand_regering,group = kand_regering)) +
+  geom_hline(yintercept = 0, linetype = "dashed", linewidth = 0.4) +#nul-linje
+  geom_ribbon(
+    aes(ymin = lower.CL, ymax = upper.CL),alpha   = 0.20,colour  = NA) +
+  geom_line(linewidth = 0.9) +
+  geom_point(size = 2.7) +
+  scale_color_manual(values = c("grey50", "black")) +
+  scale_fill_manual(values  = c("grey80", "grey40")) +
+  scale_y_continuous(
+    labels = percent_format(accuracy = 1),
+    expand = expansion(mult = c(0.05, 0.05))) +
+  labs(
+    x     = "Niveau af politisk tillid",
+    y     = "−Δ sandsynlighed for demokratisk vs. udemokratisk kandidatpræference",
+    color = "Partiets regeringserfaring",
+    fill  = "Partiets regeringserfaring",
+    title = "Straf for udemokratisk adfærd fordelt på politisk tillid og regeringserfaring"
+  ) +
+  theme_minimal(base_size = 13, base_family = "Times New Roman") +
+  theme(
+    legend.position    = "top",
+    legend.title       = element_text(size = 11),
+    legend.text        = element_text(size = 10),
+    plot.title         = element_text(hjust = 0.5, face = "bold", size = 14),
+    plot.subtitle      = element_text(hjust = 0.5, size = 11),
+    panel.grid.minor   = element_blank(),
+    panel.grid.major.x = element_blank(),          
+    axis.title.x       = element_text(margin = margin(t = 8)),
+    axis.title.y       = element_text(margin = margin(r = 8)),
+    axis.text.x        = element_text(size = 11),
+    axis.text.y        = element_text(size = 11)
+  )
+
+h4_effekt_plot
+
+
+#gemmer
+ggsave(filename="h4_effekt_plot.png",
+       plot=h4_effekt_plot,
+       path="/Users/lineamarie/Desktop/Speciale data/Data forberedelse",
+       width=8,
+       height=5.6,
+       dpi=460)
+
+
+#Omnibus F-TEST AF H4:Er forskellen mellem disse tre straffe og regeringserfaring signifikant (Leeper et al. 2020: 20-21).
+#Nested model comparison mellem en model u/ interaktioner og en model m/ interaktioner.
+#Formelt en F-test af nulhypotesen at alle interaktionstermer er 0. 
+
+# Restricted model: ingen ekstra moderering fra regeringserfaring
+# (kun interaktion mellem demokrati og tillid)
+model_h4_restricted <- feols(
+  choice ~ kand_demokrati_binær * tillid_tertil_value + kand_regering | pair_id,
+  cluster = ~participant_id,
+  data = df_clean
+)
+
+#Unrestricted model: fuld trevejs interaktion (tillader at straf-effekten også afhænger af regeringserfaring)
+model_h4_unrestricted <- feols(
+  choice ~ kand_demokrati_binær * tillid_tertil_value * kand_regering | pair_id,
+  cluster = ~participant_id,
+  data = df_clean
+)
+
+#Omnibus F-test: tester om de ekstra interaktionsled med kand_regering samlet set forbedrer modellens fit
+wald(model_h4_unrestricted, fe.restricted = model_h4_restricted)
+#Hvis p <,05 kan H0 forkastes, dvs. regeringserfaring modererer straf-effekten (og H4 får formel støtte).
+#Det kan dog skyldes tillid. 
+#Derfor bruges emmeans til specifikt at teste om forskellen mellem regeringsgrupperne inden for hvert tillidsniveau er signifikant.
+contrasts_h4 <- contrast(emm_h4, interaction = "pairwise", by = "tillid_tertil_value")
+df_contrasts <- as.data.frame(summary(contrasts_h4))
+
+#Vender fortegn, så de passer til straffe-effekten (negativ) i de andre figurer og tabeller
+df_contrasts <- df_contrasts %>%
+  mutate(estimate = -estimate)
+
+#gør klar til at gemme med stargazer
+df_contrasts_stargazer <- df_contrasts %>%
+  mutate(
+    estimate = round(estimate, 3),
+    SE = round(SE, 3),
+    p.value = round(p.value, 3),
+    sig = case_when(
+      p.value < 0.001 ~ "***",
+      p.value < 0.01  ~ "**",
+      p.value < 0.05  ~ "*",
+      TRUE ~ ""
+    )
+  ) %>%
+  select(`Tillidsniveau` = tillid_tertil_value,
+         `Estimate (Δ straf)` = estimate,
+         `SE` = SE,
+         `t` = t.ratio,
+         `p-værdi` = p.value,
+         `Signifikans` = sig)
+
+#gemmer med stargazer
+stargazer(
+  df_contrasts_stargazer,
+  type = "html",
+  out="Tabel_H4.html",
+  summary = FALSE,
+  title = "Forskelle i straffe-effekt mellem kandidater med og uden regeringserfaring",
+  notes = "Δ straf angiver ændringen i sandsynlighed for kandidatvalg (når demokratisk → udemokratisk). Mere negativt = stærkere straf. *** p < .001, ** p < .01, * p < .05.",
+  rownames = FALSE
+)
+
+#tjekker gruppestørrelser pga. større CI'er (observationer)
+df_clean %>%
+  dplyr::count(tillid_tertil_value, kand_regering) %>%
+  dplyr::arrange(tillid_tertil_value, kand_regering)
+
+#(respondenter)
+df_clean %>%
+  dplyr::group_by(tillid_tertil_value, kand_regering) %>%
+  dplyr::summarise(
+    n_obs = n(),
+    n_resp = dplyr::n_distinct(participant_id)
+  ) %>%
+  dplyr::arrange(tillid_tertil_value, kand_regering)
+
+#Tester tovejs-interaktion mellem udemokratisk adfærd x regeringserfaring som robusthedstjek - mere power
+
+#Enkel H4-model: kun regeringserfaring
+model_h4_simple <- feols(
+  choice ~ kand_demokrati_binær * kand_regering | pair_id,
+  cluster = ~participant_id,
+  data = df_clean)
+
+summary(model_h4_simple)
+
+#Gem med modelsummary
+modelsummary(
+  list("H4 (simpel)" = model_h4_simple),
+  output   = "model_H4_simple_output.docx",
+  estimate = "{estimate}{stars}",
+  statistic = c(
+    "Std. Error" = "std.error",
+    "p-værdi"    = "p.value"
+  ),
+  shape = term ~ model + statistic,
+  stars = TRUE,
+  title = "H4 (simpel): Effekt af (u)demokratisk adfærd og regeringserfaring",
+  coef_map = c(
+    "kand_demokrati_binærUdemokratisk" =
+      "Udemokratisk adfærd",
+    "kand_regeringHar tidligere siddet i regering" =
+      "Regeringserfaring",
+    "kand_demokrati_binærUdemokratisk:kand_regeringHar tidligere siddet i regering" =
+      "Udemokratisk adfærd × Regeringserfaring"
+  ),
+  gof_omit = "R2$|R2 Adj|RMSE|Std.Errors")
+
+#Marginale middelværdier - gns. sands. for at vælge dem. vs. udem for hver regeringserfaring
+emm_h4_simple <- emmeans(model_h4_simple,
+                         ~ kand_demokrati_binær | kand_regering)
+
+summary(emm_h4_simple)
+
+#Forskellen mellem dem - udem (straffeeffekten for hver erfaringsgruppe)
+diffs_h4_simple <- contrast(emm_h4_simple, method = "revpairwise", by = "kand_regering")
+df_h4_simple <- as.data.frame(summary(diffs_h4_simple, infer = c(TRUE, TRUE))) #CI'er med i summary
+
+#Test om straffen er forskellig mellem grupperne (altså interaktionseffekten)
+contrast_regering <- contrast(emm_h4_simple, interaction = "pairwise")
+summary(contrast_regering)
+
+#tabel
+tabel_h4_simple <- df_h4_simple %>%
+  mutate(
+    estimate = -estimate,  #vender fortegn, så negativ = stærkere straf
+    lower.CL = -upper.CL,
+    upper.CL = -lower.CL,
+    p.value  = scales::pvalue(p.value)
+  ) %>%
+  select(Regeringserfaring = kand_regering,
+         `Straf (Δ)` = estimate,
+         `Nedre 95% CI` = lower.CL,
+         `Øvre 95% CI` = upper.CL,
+         `p-værdi` = p.value)
+
+tabel_h4_simple
+#gemmer som html
+html_code <- kable(tabel_h4_simple, format = "html")
+
+write(
+  html_code,
+  file = "~/Desktop/Speciale data/tabel_h4_simple.html"
+)
+
+
+
+#formel test af om interaktionstermen mellem kand_demokrati_binær x kand_regering er signifikant
+wald(model_h4_simple, "kand_demokrati_binærUdemokratisk:kand_regering") #p=0,665, altså ikke signifikant
+
+#plot h4 simple
+h4_simple_plot <- ggplot(df_h4_simple, aes(x = kand_regering, y = -estimate)) +
+  geom_point(size = 3, color = "firebrick") +
+  geom_errorbar(aes(ymin = -upper.CL, ymax = -lower.CL), width = 0.1, color = "firebrick") +
+  geom_hline(yintercept = 0, linetype = "dashed", alpha = 0.4) +
+  scale_y_continuous(labels = percent_format(accuracy = 1)) +
+  labs(
+    x = "Kandidatens regeringserfaring",
+    y = "Straffe-effekt af udemokratisk adfærd (−Δ sandsynlighed)",
+    title = "Effekten af udemokratisk adfærd blandt kandidater med og uden regeringserfaring"
+  ) +
+  theme_minimal(base_size = 13, base_family = "Times New Roman")
+
+ggsave(filename="h4_simple_plot.png",
+       plot=h4_simple_plot,
+       path="/Users/lineamarie/Desktop/Speciale data/Data forberedelse",
+       width=10,
+       height=6,
+       dpi=380)
+
+#Tester robusthedstjek fordelt på om respondenten vil stemme challenger- eller mainstream-parti
+
+#Laver mainstream-/challenger-variabel
+df_clean <- df_clean %>%
+  mutate(
+    partitype = case_when(
+      q6_stemmevalg %in% c(
+        "A: Socialdemokratiet",
+        "V: Venstre, Danmarks Liberale Parti",
+        "C: Det Konservative Folkeparti",
+        "B: Radikale Venstre",
+        "F: SF - Socialistisk Folkeparti",
+        "I: Liberal Alliance",
+        "M: Moderaterne"
+      ) ~ "Mainstream-parti",
+      
+      q6_stemmevalg %in% c(
+        "Å: Alternativet",
+        "Æ: Danmarksdemokraterne - Inger Støjberg",
+        "H: Borgernes Parti - Lars Boje Mathiesen",
+        "O: Dansk Folkeparti",
+        "Ø: Enhedslisten - De Rød-Grønne",
+        "Et andet parti"
+      ) ~ "Challenger-parti",
+      
+      q6_stemmevalg %in% c(
+        "Ved ikke",
+        "Ville stemme blankt"
+      ) ~ NA_character_,   
+      
+      TRUE ~ NA_character_
+    ),
+    partitype = factor(
+      partitype,
+      levels = c("Mainstream-parti", "Challenger-parti")
+    )
+  )
+
+# Tjek fordelingen
+table(df_clean$partitype, useNA = "ifany")
+
+#robusthedstjek for H4 (partitype)
+model_h4_partitype <- feols(
+  choice ~ kand_demokrati_binær * partitype | pair_id,
+  cluster = ~participant_id,
+  data = df_clean
+)
+
+#Gemmer med modelsummary
+modelsummary(
+  list("H4 (partitype)" = model_h4_partitype),
+  output   = "model_H4_partitype_output.docx",
+  estimate = "{estimate}{stars}",
+  statistic = c(
+    "Std. Error" = "std.error",
+    "p-værdi" = "p.value"
+  ),
+  shape = term ~ model + statistic,
+  stars = TRUE,
+  title = "H4 (robusthedstjek): Effekt af (u)demokratisk adfærd og respondenters valg af partitype",
+  coef_map = c(
+    "kand_demokrati_binærUdemokratisk" =
+      "Udemokratisk adfærd",
+    "kand_demokrati_binærUdemokratisk:partitypeChallenger-parti" =
+      "Udemokratisk adfærd × Challenger-parti"
+  ),
+  gof_omit = ".*"   #fjerner alle GOF-rækker
+)
+
+#marginal means 
+#Marginale middelværdier
+emm_h4_party <- emmeans(
+  model_h4_partitype,
+  ~ kand_demokrati_binær | partitype
+)
+
+summary(emm_h4_party)
+
+#Beregner straf-effekten (forskel i støtte)
+diffs_h4_party <- contrast(
+  emm_h4_party,
+  method = "revpairwise",  #forskellen (demokratisk - udemokratisk)
+  by = "partitype"
+)
+
+summary(diffs_h4_party)
+
+#gemmer som html
+html_code <- kable(diffs_h4_party, format = "html")
+
+write(
+  html_code,
+  file = "~/Desktop/Speciale data/diffs_h4_party.html"
+)
+
+#vender fortegn, så negativ=hårdere straf
+df_h4_party <- as.data.frame(summary(diffs_h4_party, infer = TRUE)) %>%
+  mutate(
+    estimate = -estimate, 
+    lower.CL = -upper.CL,
+    upper.CL = -lower.CL
+  )
+df_h4_party
+
+#Robusthed - 3-vejs-interaktion mellem udem adfærd, partitilhørsforhold og kandidattype
+model_h4_challenger <- feols(
+  choice ~kand_demokrati_binær*partitype*kand_regering| pair_id,
+  cluster = ~participant_id,
+  data = df_clean
+)
+
+#Gemmer modeloutput med modelsummary
+modelsummary(
+  list("H4 (3-vejs)" = model_h4_challenger),
+  output   = "model_H4_challenger_output.docx",
+  estimate = "{estimate}{stars}",
+  statistic = c(
+    "Std. Error" = "std.error",
+    "p-værdi"    = "p.value"
+  ),
+  shape = term ~ model + statistic,
+  stars = TRUE,
+  title = "H4 (robusthedstjek): 3-vejs-interaktion mellem (u)demokratisk adfærd, respondenters valg af partitype og regeringserfaring",
+  coef_map = c(
+    "kand_demokrati_binærUdemokratisk" =
+      "Udemokratisk adfærd",
+    "kand_demokrati_binærUdemokratisk:partitypeChallenger-parti" =
+      "Udemokratisk adfærd × Challenger-parti",
+    "kand_demokrati_binærUdemokratisk:kand_regeringHar tidligere siddet i regering" =
+      "Udemokratisk adfærd × Regeringserfaring",
+    "kand_demokrati_binærUdemokratisk:partitypeChallenger-parti:kand_regeringHar tidligere siddet i regering" =
+      "Udemokratisk adfærd × Challenger-parti × Regeringserfaring"
+  ),
+  gof_omit = ".*"
+)
+
+
+#Marginal means
+emm_h4_challenger <- emmeans(
+  model_h4_challenger,
+  ~ kand_demokrati_binær | partitype * kand_regering
+)
+
+summary(emm_h4_challenger)
+
+#Beregner straf-effekt (Demokratisk - Udemokratisk) inden for hver gruppe
+diffs_h4_challenger <- contrast(
+  emm_h4_challenger,
+  method = "revpairwise",  #Demokratisk - Udemokratisk
+  by = c("partitype", "kand_regering")
+)
+
+diffs_h4_challenger_df <- as.data.frame(summary(diffs_h4_challenger))
+
+
+# ROBUSTHEDSTESTS TIL HELE ANALYSEN - CONJOINTEKSPERIMENTETS ANTAGELSER
+
+#Test af randomisering - fremgår attributniveauerne ligeligt
+table(df_clean$kand_demokrati_binær)
+table(df_clean$kand_regering)
+table(df_clean$kand_indvandring)
+table(df_clean$kand_klima)
+table(df_clean$kand_køn)
+
+#Laver samlet data frame
+df_rand <- df_clean
+
+#Hjælpefunktion til at lave fordeling pr. variabel
+lav_fordeling <- function(data, var, feature_label) {
+  data %>%
+    group_by({{ var }}) %>%
+    tally() %>%
+    mutate(
+      andel  = (n / nrow(data)) * 100,
+      feature = feature_label,
+      level   = as.factor({{ var }})
+    )
+}
+
+#Laver fordelinger for hver attribut
+rand_demokrati <- lav_fordeling(df_rand, kand_demokrati_binær, "Demokratisk adfærd")
+rand_regering  <- lav_fordeling(df_rand, kand_regering,         "Regeringserfaring")
+rand_indvand   <- lav_fordeling(df_rand, kand_indvandring,      "Indvandring")
+rand_klima     <- lav_fordeling(df_rand, kand_klima,            "Klima")
+rand_køn       <- lav_fordeling(df_rand, kand_køn,              "Køn")
+
+#Samler
+rand <- bind_rows(
+  rand_demokrati,
+  rand_regering,
+  rand_indvand,
+  rand_klima,
+  rand_køn
+)
+
+# Plot
+plot_rand <- rand %>%
+  ggplot(aes(x = andel,
+             y = fct_reorder(level, andel),
+             label = round(andel, 1))) +
+  geom_col(fill = "grey20", width=0.3) +
+  geom_text(hjust = -0.1, size = 3) +
+  scale_x_continuous(expand = c(0, 0), limits = c(0, 100)) +
+  facet_grid(feature ~ ., scales = "free_y", space = "free_y") +
+  labs(
+    title = "Fordeling af attributniveauer i conjoint-eksperimentet",
+    x = "Procent af profiler",
+    y = ""
+  ) +
+  theme_bw() +
+  theme(
+    axis.text = element_text(size = 9, family="Times New Roman"),
+    strip.text.y = element_text(size = 9, family="Times New Roman"),
+    plot.title = element_text(size = 12, family="Times New Roman")
+  )
+
+plot_rand
+
+#Gemmer
+ggsave("fordeling_attributter.png", plot_rand, width = 6, height = 7.5, dpi = 320)
+
+
+#Tester, om fordelingen af niveauer afviger fra helt ligelig fordeling. (chi^2-test)
+
+#Demokratisk vs. udemokratisk (forventet 50/50)
+chisq.test(table(df_clean$kand_demokrati_binær))
+
+#Regeringserfaring (forventet 50-50)
+chisq.test(table(df_clean$kand_regering))
+
+#Indvandring (forventet 1/3 - 1/3 - 1/3)
+chisq.test(table(df_clean$kand_indvandring))
+
+#Klima (forventet 1/3 - 1/3 - 1/3)
+chisq.test(table(df_clean$kand_klima))
+
+#Køn (forventet 50-50)
+chisq.test(table(df_clean$kand_køn))
+
+#Test af balance - er niveauerne uafhængige af respondenternes karakteristika?
+df_clean$q2_køn
+df_clean$q3_alder
+df_clean$q4_kommune
+df_clean$q5_uddannelse
+df_clean$q6_stemmevalg
+
+#Laver balancetest-datasæt
+df_balance <- df_clean
+
+#Hjælpefunktion til at lave balancetest-plot
+plot_balance <- function(mm_obj, xlab, h0_line) {
+  mm_obj %>%
+    ggplot(aes(x = estimate,
+               y = fct_reorder(level, estimate))) +
+    geom_point(size = 2) +
+    geom_errorbarh(aes(xmin = lower, xmax = upper),
+                   height = 0.4) +
+    geom_vline(xintercept = h0_line,
+               linetype = "longdash") +
+    xlab(xlab) +
+    ylab("") +
+    facet_grid(feature ~ ., scales = "free_y", space = "free_y") +
+    theme_bw(base_family = "Times New Roman") +
+    theme(
+      axis.text.y = element_text(size = 9),
+      axis.title.x = element_text(size = 10),
+      strip.text.y = element_text(size = 10)
+    )
+}
+
+#Balancetest for køn
+#Laver indikator. Kvinde=1, mand=0
+
+df_balance <- df_balance %>%
+  mutate(køn_kvinde = ifelse(q2_køn == "Kvinde", 1, 0))
+
+mm_balance_køn <- cj(
+  data    = df_balance,
+  formula = køn_kvinde ~ kand_demokrati_binær + kand_regering +
+    kand_indvandring + kand_klima + kand_køn,
+  id      = ~ participant_id,
+  estimate = "mm",
+  h0       = mean(df_balance$køn_kvinde, na.rm = TRUE)
+)
+
+h0_køn <- mean(df_balance$køn_kvinde, na.rm = TRUE)
+
+plot_balance_køn <- plot_balance(mm_balance_køn,
+                                 xlab   = "Marginal mean (andel kvinder)",
+                                 h0_line = h0_køn)
+
+plot_balance_køn
+
+#Gemmer
+ggsave("balancekøn.png", plot_balance_køn, width = 5, height = 8, dpi = 320)
+
+#Balancetest for alder
+df_balance <- df_balance %>%
+  mutate(alder = as.numeric(q3_alder))
+
+mm_balance_alder <- cj(
+  data    = df_balance,
+  formula = alder ~ kand_demokrati_binær + kand_regering +
+    kand_indvandring + kand_klima + kand_køn,
+  id      = ~ participant_id,
+  estimate = "mm",
+  h0       = mean(df_balance$alder, na.rm = TRUE)
+)
+
+h0_alder <- mean(df_balance$alder, na.rm = TRUE)
+
+plot_balance_alder <- plot_balance(mm_balance_alder,
+                                   xlab    = "Marginal mean (gennemsnitsalder)",
+                                   h0_line = h0_alder)
+
+plot_balance_alder
+
+#Gemmer
+ggsave("balancealder.png", plot_balance_alder, width = 5, height = 8, dpi = 320)
+
+#Balancetest for uddannelse
+
+#indikator, 1=videregående uddanelse, 0=kortere end videregående uddanelse
+# Sørg for at sætte uddannelse som faktor med kendte levels
+df_balance$q5_uddannelse <- factor(df_balance$q5_uddannelse)
+
+# Eksempel: definér videregående uddannelse
+df_balance <- df_balance %>%
+  mutate(udd_videregaaende = ifelse(q5_uddannelse %in% c("Kort videregående uddannelse (under 3 år, f.eks. installatør, politibetjent, laborant)",
+                                                         "Mellemlang videregående uddannelse (3-4 år, f.eks. folkeskolelærer, sygeplejerske, pædagog)",
+                                                         "Bacheloruddannelse (f.eks. første del af en lang videregående uddannelse)",
+                                                         "Lang videregående uddannelse (f.eks. gymnasielærer, jurist, læge, kandidatgrad, MBA)",
+                                                         "Forskeruddannelse (f.eks. ph.d)"),
+                                    1, 0))
+
+mm_balance_udd <- cj(
+  data    = df_balance,
+  formula = udd_videregaaende ~ kand_demokrati_binær + kand_regering +
+    kand_indvandring + kand_klima + kand_køn,
+  id      = ~ participant_id,
+  estimate = "mm",
+  h0       = mean(df_balance$udd_videregaaende, na.rm = TRUE)
+)
+
+h0_udd <- mean(df_balance$udd_videregaaende, na.rm = TRUE)
+
+plot_balance_udd <- plot_balance(mm_balance_udd,
+                                 xlab    = "Marginal mean (videregående uddannelse)",
+                                 h0_line = h0_udd)
+
+plot_balance_udd
+
+#Gemmer
+ggsave("balanceudd.png", plot_balance_udd, width = 5, height = 8, dpi = 320)
+
+
+#Tester for carryover-effekter
+
+#Laver en særlig indikator for hvert opgavenummer
+df_clean <- df_clean %>%
+  mutate(opgavenummer = case_when(qes==1 ~ "Opgave 1",
+                                  qes==2 ~ "Opgave 2",
+                                  qes==3 ~ "Opgave 3",
+                                  qes==4 ~ "Opgave 4",
+                                  qes==5 ~ "Opgave 5",
+                                  qes==6 ~ "Opgave 6"))
+
+
+#Bestemmer rækkefølgen
+df_clean$opgavenummer <- factor(df_clean$opgavenummer, levels=c("Opgave 1", "Opgave 2", "Opgave 3", "Opgave 4", "Opgave 5", "Opgave 6"))
+
+table(df_clean$opgavenummer)
+
+#ANOVA-test
+anova <- cj_anova (data=df_clean,
+                   formula=choice~kand_demokrati_binær+kand_indvandring+kand_klima+kand_regering+kand_køn,id=~participant_id, by=~opgavenummer)
+
+#Gemmer som data frame
+anova_df <- as.data.frame(anova)
+
+#Laver tabel
+anova_tab <- anova_df %>%
+  mutate(
+    F = round(F, 2),
+    p_value = ifelse(`Pr(>F)` < 0.001, "< 0.001", round(`Pr(>F)`, 3))
+  ) %>%
+  rename(
+    `Residual df` = `Resid. Df`,
+    `Residual deviance` = `Resid. Dev`,
+    `Df` = Df,
+    `Deviance` = Deviance,
+    `F-statistik` = F,
+    `p-værdi` = p_value
+  )
+
+#Gemmer
+stargazer(
+  anova_tab,
+  type = "html",
+  out = "Tabel_ANOVA_cj.html",
+  summary = FALSE,
+  rownames = FALSE,
+  title = "ANOVA-test af carryover-effekter på tværs af conjoint-opgaver",
+  notes = "Tabellen viser omnibus F-tests af, om effekterne af kandidatkarakteristika varierer systematisk på tværs af conjoint-opgaver. Testen er baseret på marginale middelværdier estimeret separat for hver opgave. Fravær af signifikante forskelle indikerer, at resultaterne ikke er påvirket af carryover-effekter."
+)
+
+#Marginal means-model for test af carryovereffekter
+mm_opgavenummer <- cj(data = df_clean ,
+                    formula = choice ~ kand_demokrati_binær + kand_indvandring + kand_klima + kand_køn + kand_regering, 
+                    id = ~participant_id,
+                    by = ~opgavenummer,
+                    estimate = "mm",
+                    h0 = 0.5)
+
+#Visualiser
+library(viridis) #til farver
+
+plot_opgavenummer <- mm_opgavenummer %>% 
+  ggplot(., aes(x = estimate, 
+                y = reorder(level, desc(level)),
+                colour = opgavenummer)) +
+  geom_point(position = position_dodge(width = 0.5),
+             size = 2) +
+  geom_errorbarh(aes(xmin = lower, 
+                     xmax = upper),
+                 position = position_dodge(width = 0.5),
+                 height = 0.5) +
+  geom_vline(xintercept = 0.5,
+             linetype = "longdash",
+             color = "black") +
+  xlab("Sandsynlighed for valg af kandidat (marginal means)") +
+  ylab("") +
+  facet_grid(feature ~ .,
+             scales = "free_y",
+             space = "free_y") +
+  theme(legend.position = "bottom",
+        legend.title = element_blank(),
+        text = element_text(family = "Times"),
+        axis.title.x = element_text(size = 10)) +
+  guides(shape = guide_legend(nrow = 2,
+                              byrow = TRUE)) + 
+  #Viridis  farveskala
+  scale_color_viridis_d(
+    option = "plasma",     #farve
+    begin = 0.1, end = 0.9,
+    direction = 1,
+    name = "Opgave"
+  ) +
+  # Behold de samme breaks i legenden
+  scale_shape_discrete(breaks = c("Opgave nr. 1",
+                                  "Opgave nr. 2",
+                                  "Opgave nr. 3",
+                                  "Opgave nr. 4",
+                                  "Opgave nr. 5",
+                                  "Opgave nr. 6"))+ 
+  theme(
+    panel.background = element_rect(fill = "white", colour = NA),
+    panel.grid.major = element_line(colour = "grey90"),
+    panel.grid.minor = element_line(colour = "grey90")
+  )
+
+plot_opgavenummer
+
+#gem 
+ggsave(filename = "plot_opgavnummer.png",
+       plot = plot_opgavenummer, 
+       path = "/Users/lineamarie/Desktop/Speciale data/Data forberedelse",
+       width = 7, 
+       height = 9,
+       dpi = 420)
+
+
+#Test for profile order effects (venstre vs. højre placering)
+table(df_clean$alt) #profilnummer er givet ved variablen "alt"
+
+#Først omnibus test ANOVA TEST 
+anova_profilnummer <- cj_anova(data = df_clean, formula = choice ~ kand_demokrati_binær + kand_køn + kand_indvandring + kand_klima + kand_regering, 
+                               id = ~ participant_id, by = ~ alt) 
+
+anova_profilnummer
+anova_df <- as.data.frame(anova_profilnummer) #Laver til dataframe
+#gemmer som html
+stargazer(anova_df,
+          type = "html",
+          summary = FALSE,
+          title = "ANOVA-test af profilplaceringseffekter",
+          out = "anova_profilnummer.html")
+
+
+
+#Laver alt til factor og sætter rækkefølge på niveauerne
+df_clean$alt_profilnummer <- factor(df_clean$alt, levels=c(1, 2),
+                      labels=c("Kandidat til venstre", "Kandidat til højre"))
+
+table(df_clean$alt_profilnummer)
+
+#Marginal means model, tester for profile order effects
+
+mm_profilnummer <- cj(data=df_clean,
+                      formula=choice~kand_demokrati_binær+kand_indvandring+kand_klima+kand_køn+kand_regering,
+                      id=~participant_id,
+                      by=~alt_profilnummer,
+                      estimate="mm",
+                      h0=0.5)
+
+#Plot
+plot_profilnummer <- mm_profilnummer %>%
+  ggplot(.,aes(x = estimate, 
+               y = reorder(level, desc(level)),
+               color = alt_profilnummer)) +
+  geom_point(position = position_dodge(width = 0.5),
+             size = 2) +
+  geom_errorbarh(aes(xmin = lower, 
+                     xmax = upper, 
+                     color = alt_profilnummer),
+                 position = position_dodge(width = 0.5),
+                 height = 0.5) +
+  scale_color_manual(values=c("Kandidat til venstre" = "maroon",
+                              "Kandidat til højre" = "midnightblue"))+
+  geom_vline(xintercept = 0.5,
+             linetype = "longdash",
+             color = "black") +
+  xlab("Sandsynlighed for kandidatvalg (marginal means)") +
+  ylab("") +
+  facet_grid(feature ~ .,
+             scales = "free_y",
+             space = "free_y") +
+  theme(legend.position = "bottom",
+        legend.title = element_blank(),
+        text = element_text(family = "Times"),
+        axis.title.x = element_text(size = 10)) +
+  guides(shape = guide_legend(nrow = 2,
+                              byrow = TRUE)) + 
+  scale_shape_discrete(breaks = c("Kandidat til venstre",
+                                  "Kandidat til højre"))+
+  theme(
+    panel.background = element_rect(fill = "white", colour = NA),
+    panel.grid.major = element_line(colour = "grey90"),
+    panel.grid.minor = element_line(colour = "grey90")
+  )
+
+plot_profilnummer
+
+#Gemmer
+ggsave(filename="profilnummer.png",
+       plot=plot_profilnummer,
+       path="/Users/lineamarie/Desktop/Speciale data/Data forberedelse",
+       width=7,
+       height=9,
+       dpi=420)
+
+
+#SUPPLERENDE SUBGRUPPE-ANALYSER
+#Effekter på tværs af køn, uddannelse, venstre-højre-placering?
+table(df_clean$q2_køn)
+table(df_clean$q5_uddannelse)
+table(df_clean$q6_stemmevalg)
+
+#Klargør baggrundsvariablerne
+df_clean_subgruppe <- df_clean %>%
+  mutate(
+    køn = factor(q2_køn),
+    udd_niveau = case_when(
+      q5_uddannelse %in% c("Ingen uddannelse", "Grundskole (f.eks. folkeskole, privatskole, efterskole)", 
+                           "Gymnasial uddannelse (f.eks. STX, HHX, HTX, HF)", "Erhvervsuddannelse (f.eks. frisør, tømrer, sosu-assistent) ") ~ "Lav",
+      q5_uddannelse %in% c("Kort videregående uddannelse (under 3 år, f.eks. installatør, politibetjent, laborant)", 
+                           "Mellemlang videregående uddannelse (3-4 år, f.eks. folkeskolelærer, sygeplejerske, pædagog)") ~ "Mellem",
+      q5_uddannelse %in% c("Bacheloruddannelse (f.eks. første del af en lang videregående uddannelse)", 
+                           "Lang videregående uddannelse (f.eks. gymnasielærer, jurist, læge, kandidatgrad, MBA)", "Forskeruddannelse (f.eks. ph.d)") ~ "Høj",
+      TRUE ~ NA_character_
+    ),
+    udd_niveau=factor(udd_niveau, levels = c("Lav", "Mellem", "Høj")), #factor
+    blok = case_when(
+      q6_stemmevalg %in% c("A: Socialdemokratiet", "F: SF - Socialistisk Folkeparti",
+                           "Ø: Enhedslisten - De Rød-Grønne", "B: Radikale Venstre", "Å: Alternativet") ~ "Rød blok",
+      q6_stemmevalg %in% c("V: Venstre, Danmarks Liberale Parti", "C: Det Konservative Folkeparti",
+                           "I: Liberal Alliance", "Æ: Danmarksdemokraterne - Inger Støjberg",
+                           "O: Dansk Folkeparti", "H: Borgernes Parti - Lars Boje Mathiesen", 
+                           "M: Moderaterne") ~ "Blå blok",
+      TRUE ~ NA_character_
+    ),
+    blok=factor(blok, levels= c("Rød blok", "Blå blok"))) #gør til factor
+  
+
+#Tester marginal means for hver subgruppe
+#KØN
+mm_køn <- cj(
+  data = df_clean_subgruppe,
+  formula = choice ~ kand_demokrati_binær + kand_køn + kand_indvandring + kand_klima + kand_regering,
+  id = ~participant_id,
+  estimate = "mm",      #Marginal means i stedet for AMCE
+  by = ~q2_køn          #Subgruppe efter køn
+)
+
+# Vis tabel
+mm_køn
+
+
+#UDDANNELSE
+mm_udd <- cj(
+  data = df_clean_subgruppe,
+  formula = choice ~ kand_demokrati_binær + kand_køn + kand_indvandring + kand_klima + kand_regering,
+  id = ~participant_id,
+  estimate = "mm",
+  by = ~udd_niveau
+)
+
+#POLITISK BLOK (venstre-højre)
+mm_blok <- cj(
+  data = df_clean_subgruppe,
+  formula = choice ~ kand_demokrati_binær + kand_køn + kand_indvandring + kand_klima + kand_regering,
+  id = ~participant_id,
+  estimate = "mm",
+  by = ~blok
+)
+
+#ANOVA-TESTS FOR INTERAKTIONER MELLEM SUBGRUPPEVARIABLEN OG ATTRIBUTTERNE
+#Køn anova-test
+mod_køn <- lm(
+  choice ~ q2_køn * (kand_demokrati_binær + kand_køn + kand_indvandring + kand_klima + kand_regering),
+  data = df_clean_subgruppe
+)
+
+library(car)
+Anova(mod_køn, type = "III")
+#gemmer som data frame og gemmer output
+anova_køn <- Anova(mod_køn, type="III")
+anova_df <- as.data.frame(anova_køn)
+anova_df$Term <- rownames(anova_df)
+rownames(anova_df) <- NULL
+
+anova_tab <- anova_df %>%
+  mutate(
+    `F-statistik` = round(F, 2),
+    p_value = ifelse(`Pr(>F)` < 0.001, "< 0.001", round(`Pr(>F)`, 3))
+  ) %>%
+  select(
+    Term,
+    Df,
+    `F-statistik`,
+    p_value
+  ) %>%
+  rename(
+    Effekt = Term,
+    `p-værdi` = p_value
+  )
+
+#Filtrerer kun på interaktionerne
+anova_tab <- anova_tab %>%
+  filter(grepl(":", Effekt))
+
+#Gemmer tabellen
+stargazer(
+  anova_tab,
+  type = "html",
+  out = "Tabel_ANOVA_subgrupper_køn.html",
+  summary = FALSE,
+  rownames = FALSE,
+  title = "ANOVA-test af interaktioner mellem køn og kandidatkarakteristika",
+  notes = "Tabellen viser Type III ANOVA-tests af, om effekterne af kandidatkarakteristika varierer systematisk mellem mænd og kvinder."
+)
+
+
+#Uddannelse anova-test
+mod_udd <- lm(
+  choice ~ udd_niveau * (kand_demokrati_binær + kand_køn + kand_indvandring + kand_klima + kand_regering),
+  data = df_clean_subgruppe
+)
+anova(mod_udd)
+Anova(mod_udd, type = "III")
+
+#Gemmer som data frame
+anova_df_udd <- as.data.frame(Anova(mod_udd, type = "III"))
+anova_df_udd$Term <- rownames(anova_df_udd)
+rownames(anova_df_udd) <- NULL
+
+#Gemmer som tabel
+anova_tab_udd <- anova_df_udd %>%
+  mutate(
+    `F-statistik` = round(F, 2),
+    p_value = ifelse(`Pr(>F)` < 0.001, "< 0.001", round(`Pr(>F)`, 3))
+  ) %>%
+  select(
+    Term,
+    Df,
+    `F-statistik`,
+    p_value
+  ) %>%
+  rename(
+    Effekt = Term,
+    `p-værdi` = p_value
+  ) %>%
+  filter(grepl(":", Effekt))
+
+#Gemmer output som html
+stargazer(
+  anova_tab_udd,
+  type = "html",
+  out = "Tabel_ANOVA_subgrupper_uddannelse.html",
+  summary = FALSE,
+  rownames = FALSE,
+  title = "ANOVA-test af interaktioner mellem uddannelsesniveau og kandidatkarakteristika",
+  notes = "Tabellen viser Type III ANOVA-tests af, om effekterne af kandidatkarakteristika varierer på tværs af uddannelsesniveauer."
+)
+
+#Politisk blok anova-test
+mod_blok <- lm(
+  choice ~ blok * (kand_demokrati_binær + kand_køn + kand_indvandring + kand_klima + kand_regering),
+  data = df_clean_subgruppe
+)
+anova(mod_blok)
+Anova(mod_blok, type = "III")
+
+#Gemmer data frame
+anova_df_blok <- as.data.frame(Anova(mod_blok, type = "III"))
+anova_df_blok$Term <- rownames(anova_df_blok)
+rownames(anova_df_blok) <- NULL
+
+#Gemmer som tabel
+anova_tab_blok <- anova_df_blok %>%
+  mutate(
+    `F-statistik` = round(F, 2),
+    p_value = ifelse(`Pr(>F)` < 0.001, "< 0.001", round(`Pr(>F)`, 3))
+  ) %>%
+  select(
+    Term,
+    Df,
+    `F-statistik`,
+    p_value
+  ) %>%
+  rename(
+    Effekt = Term,
+    `p-værdi` = p_value
+  ) %>%
+  filter(grepl(":", Effekt))
+
+#Gemmer output som html
+stargazer(
+  anova_tab_blok,
+  type = "html",
+  out = "Tabel_ANOVA_subgrupper_blok.html",
+  summary = FALSE,
+  rownames = FALSE,
+  title = "ANOVA-test af interaktioner mellem politisk blok og kandidatkarakteristika",
+  notes = "Tabellen viser Type III ANOVA-tests af, om effekterne af kandidatkarakteristika varierer på tværs af politiske blokke."
+)
+
+#SAMLET PLOT
+#Gør alle "by"-kolonner ens (ensartet navn)
+mm_all <- bind_rows(
+  rename(as.data.frame(mm_køn), undergruppe = q2_køn)       %>% mutate(gruppe = "Køn"),
+  rename(as.data.frame(mm_udd), undergruppe = udd_niveau)   %>% mutate(gruppe = "Uddannelse"),
+  rename(as.data.frame(mm_blok), undergruppe = blok)        %>% mutate(gruppe = "Politisk blok")
+)
+
+#Plotter
+subgruppeanalyse <- ggplot(mm_all, aes(x = estimate,
+                   y = reorder(level, desc(level)),
+                   color = undergruppe)) +
+  geom_point(position = position_dodge(width = 0.5), size = 2) +
+  geom_errorbarh(aes(xmin = lower, xmax = upper),
+                 position = position_dodge(width = 0.5),
+                 width = 0.5) +  
+  geom_vline(xintercept = 0.5, linetype = "longdash") +
+  facet_grid(gruppe ~ feature, scales = "free_y", space = "free_y") +
+  theme_minimal(base_family = "Times") +
+  theme(legend.position = "bottom",
+        legend.title = element_blank(),
+        axis.title.x = element_text(size = 10)) +
+  xlab("Sandsynlighed for kandidatvalg (marginal means)") +
+  ylab("")
+
+ggsave(filename="subgruppeanalyse.png",
+       plot=subgruppeanalyse,
+       path="/Users/lineamarie/Desktop/Speciale data/Data forberedelse",
+       width=8,
+       height=6,
+       dpi=720)
