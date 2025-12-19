@@ -3228,9 +3228,29 @@ mm_køn <- cj(
   by = ~q2_køn          #Subgruppe efter køn
 )
 
-# Vis tabel
+# Vis tabel og konverter til data frame
 mm_køn
+mm_køn_df <- as.data.frame(mm_køn)
+#Renser
+mm_køn_clean <- mm_køn_df |>
+  dplyr::select(
+    q2_køn,
+    feature,
+    level,
+    estimate,
+    std.error
+  )
+mm_køn_clean$estimate  <- round(mm_køn_clean$estimate, 3)
+mm_køn_clean$std.error <- round(mm_køn_clean$std.error, 3)
 
+#Gem som HTML
+stargazer(
+  mm_køn_clean,
+  type = "html",
+  summary = FALSE,
+  title = "Marginal Means efter respondentens køn",
+  out = "mm_køn_clean.html"
+)
 
 #UDDANNELSE
 mm_udd <- cj(
@@ -3241,6 +3261,28 @@ mm_udd <- cj(
   by = ~udd_niveau
 )
 
+#Konverter til data frame og rens for irrelevante kolonner
+mm_udd_df <- as.data.frame(mm_udd)
+mm_udd_clean <- mm_udd_df |>
+  dplyr::select(
+    udd_niveau,
+    feature,
+    level,
+    estimate,
+    std.error)
+
+mm_udd_clean$estimate  <- round(mm_udd_clean$estimate, 3)
+mm_udd_clean$std.error <- round(mm_udd_clean$std.error, 3)
+
+#Gem
+stargazer(
+  mm_udd_clean,
+  type = "html",
+  summary = FALSE,
+  title = "Marginal means efter uddannelsesniveau",
+  out = "mm_udd_clean.html")
+
+
 #POLITISK BLOK (venstre-højre)
 mm_blok <- cj(
   data = df_clean_subgruppe,
@@ -3249,6 +3291,27 @@ mm_blok <- cj(
   estimate = "mm",
   by = ~blok
 )
+
+#Konverter til data frame og rens for irrelevante kolonner
+mm_blok_df <- as.data.frame(mm_blok)
+mm_blok_clean <- mm_blok_df |>
+  dplyr::select(
+    blok,
+    feature,
+    level,
+    estimate,
+    std.error)
+
+mm_blok_clean$estimate  <- round(mm_blok_clean$estimate, 3)
+mm_blok_clean$std.error <- round(mm_blok_clean$std.error, 3)
+
+#Gem
+stargazer(
+  mm_blok_clean,
+  type = "html",
+  summary = FALSE,
+  title = "Marginal means efter politisk blok",
+  out = "mm_blok_clean.html")
 
 #ANOVA-TESTS FOR INTERAKTIONER MELLEM SUBGRUPPEVARIABLEN OG ATTRIBUTTERNE
 #Køn anova-test
