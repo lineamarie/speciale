@@ -1197,7 +1197,13 @@ plot_generel <- conjoint_generel %>%
   xlab("Sandsynlighed for præference for kandidat (marginal means)")+
   ylab("")+
   facet_grid(feature~.,
-             scales="free_y",space="free_y")
+             scales="free_y",space="free_y")+
+  theme(
+    text = element_text(family = "Times New Roman"),
+    axis.text = element_text(size = 11),
+    axis.title = element_text(size = 12),
+    strip.text = element_text(size = 12)
+  )
 plot_generel 
 
 #gemmer plot
@@ -1205,7 +1211,7 @@ ggsave(filename="plot_generel.png",
 plot=plot_generel,
 path="/Users/lineamarie/Desktop/Speciale data/Figurer",
 width=8,
-height=8,
+height=9,
 dpi=320) #dots per inch/pixels per tomme (opløsning)
 
 #Laver en ny mm-model, hvor jeg udregner generelle conjoint-estimater på de samlede kategorier (politisk enighed x2 + den binære demokrati-variabel)
@@ -1251,7 +1257,13 @@ plot_generel_samlet <- conjoint_generel_samlet %>%
   xlab("Sandsynlighed for præference for kandidat (marginal means)")+
   ylab("")+
   facet_grid(feature~.,
-             scales="free_y",space="free_y")
+             scales="free_y",space="free_y")+
+  theme(
+    text = element_text(family = "Times New Roman"),
+    axis.text = element_text(size = 11),
+    axis.title = element_text(size = 12),
+    strip.text = element_text(size = 12)
+  )
 plot_generel_samlet
 
 #gemmer plot
@@ -1259,7 +1271,7 @@ ggsave(filename="plot_generel_samlet.png",
        plot=plot_generel_samlet,
        path="/Users/lineamarie/Desktop/Speciale data/Figurer",
        width=8,
-       height=8,
+       height=9.5,
        dpi=320) #dots per inch/pixels per tomme (opløsning)
 
 
@@ -1526,7 +1538,7 @@ plot_ind_enig_mm <- mm_enighed_indvandring %>%
   geom_vline(xintercept = 0.5,
              linetype = "longdash",
              color = "black") +
-  xlab("Sansynlighed for præference for kandidat (marginal means)") +
+  xlab("Sandsynlighed for præference for kandidat (marginal means)") +
   ylab("") +
   labs(title = "Indvandring") +
   facet_grid(feature ~ .,
@@ -1602,7 +1614,7 @@ plot_klima_enig_mm <- mm_enighed_klima %>%
   geom_vline(xintercept = 0.5,
              linetype = "longdash",
              color = "black") +
-  xlab("Sansynlighed for præference for kandidat (marginal means)") +
+  xlab("Sandsynlighed for præference for kandidat (marginal means)") +
   ylab("") +
   labs(title = "Klimaafgifter") +
   facet_grid(feature ~ .,
@@ -1677,7 +1689,7 @@ plot_enig_total_mm <- mm_enighed_total %>%
   geom_vline(xintercept = 0.5,
              linetype = "longdash",
              color = "black") +
-  xlab("Sansynlighed for præference for kandidat (marginal means)") +
+  xlab("Sandsynlighed for præference for kandidat (marginal means)") +
   ylab("") +
   labs(title = "Enighed generelt") +
   facet_grid(feature ~ .,
@@ -2137,7 +2149,8 @@ plot_h3_tertil <- ggplot(
   scale_y_continuous(
     labels = scales::percent_format(accuracy = 1),
     expand = expansion(mult = c(0.05, 0.08))) +
-  labs(x= "Niveau af politisk tillid (tredelt)",
+  scale_x_discrete(labels=c("Lav tillid", "Mellem tillid", "Høj tillid"))+
+  labs(x= "Niveau af politisk tillid",
        y= "Sandsynlighed for kandidatpræference",
        title = "Kandidatpræferencer på tværs af politisk tillid") +
   theme_classic(base_size = 13, base_family = "Times") +
